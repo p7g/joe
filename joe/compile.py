@@ -1,9 +1,8 @@
 import os
 import typing as t
 from contextlib import contextmanager
-from patina import Option, None_
 
-from joe import ast, types_ as ty
+from joe import ast, codegen, types_ as ty
 from joe.context import GlobalContext
 from joe.parse import ModulePath
 
@@ -14,6 +13,20 @@ def _mangle_ident(*parts: str) -> str:
     for part in parts:
         ident += f"{len(part)}{part}"
     return f"{ident}E"
+
+
+def _mangle_class_name(class_ty: ty.ClassType) -> str:
+    return _mangle_ident(*ModulePath.from_class_path(class_ty.name))
+
+
+_type_to_ident_table = str.maketrans(
+    {
+        "*": "_ptr",
+        " ": "_",
+        "[": "_array",
+        "]": "_",
+    }
+)
 
 
 # Global types include all classes, named types (fully-qualified)
@@ -61,7 +74,7 @@ class ModuleCodeGenerator(CodeGenerator):
         self.ctx = GlobalContext()
         self.ctx.populate_from_modules(modules)
         self._modules = modules
-        self._generated_array_types: t.Set[str] = set()
+        self._generated_array_types: t.Dict[ty.ArrayType, codegen.CStruct] = {}
 
     def generate(self):
         for mod in self._modules:
@@ -85,38 +98,45 @@ class ModuleCodeGenerator(CodeGenerator):
         class_type = self._resolve_class(mod, class_path)
 
         # Generate data struct type
-        data_type_name = _mangle_ident(*class_path_parts, "data")
+        data_type = codegen.CStruct(
+            name=_mangle_ident(*class_path_parts, "data")
+        )
         for name, field_ty in class_type.instance_type.fields.items():
             if isinstance(field_ty, ty.ArrayType):
                 self._get_or_create_array_type(field_ty)
                 self.emit()
-        self.emit(f"struct {data_type_name} " + "{")
-        with self.indent():
-            for name, field_ty in class_type.instance_type.fields.items():
-                self.emit(f"{self._type(field_ty)} {name};")
-        self.emit("};")
+
+        for name, field_ty in class_type.instance_type.fields.items():
+            data_type.fields.append(
+                codegen.CStructField(name=name, type=self._type(field_ty))
+            )
+
+        data_type.emit(self)
 
         # Forward declaration for object struct type
-        object_type_name = _mangle_ident(*class_path_parts)
-        self.emit()
-        self.emit(f"struct {object_type_name};")
+        object_type = codegen.CStruct(name=_mangle_ident(*class_path_parts))
+        object_type.emit_forward_decl(self)
 
         # Generate vtable struct type
-        self.emit()
-        vtable_type_name = _mangle_ident(*class_path_parts, "vtable")
-        self.emit(f"struct {vtable_type_name} " + "{")
-        with self.indent():
-            for name in class_type.instance_type.methods:
-                self.emit(f"{self._method_field(class_type, name)};")
-        self.emit("};")
+        vtable_type = codegen.CStruct(
+            name=_mangle_ident(*class_path_parts, "vtable")
+        )
+        for name in class_type.instance_type.methods:
+            vtable_type.fields.append(self._method_field(class_type, name))
+        vtable_type.emit(self)
 
         # Generate object type struct
-        self.emit()
-        self.emit(f"struct {object_type_name} " + "{")
-        with self.indent():
-            self.emit(f"struct {data_type_name} *data;")
-            self.emit(f"struct {vtable_type_name} *vtable;")
-        self.emit("};")
+        object_type.fields.extend(
+            [
+                codegen.CStructField(
+                    name="data", type=data_type.type.as_pointer()
+                ),
+                codegen.CStructField(
+                    name="vtable", type=vtable_type.type.as_pointer()
+                ),
+            ]
+        )
+        object_type.emit(self)
 
         # Generate method implementations
         for name in class_type.instance_type.methods:
@@ -125,80 +145,82 @@ class ModuleCodeGenerator(CodeGenerator):
 
         # Generate vtable variable
 
-    def _type(self, typ: ty.Type) -> str:
+    def _type(self, typ: ty.Type) -> codegen.CType:
         if isinstance(typ, ty.IntType):
-            return "int"
+            return codegen.CNamedType("int")
         elif isinstance(typ, ty.VoidType):
-            return "void"
+            return codegen.CNamedType("void")
         elif isinstance(typ, ty.ArrayType):
             return self._get_or_create_array_type(typ)
         elif isinstance(typ, ty.ClassType):
-            return f"struct {_mangle_ident(typ.name)}"
+            return codegen.CStructType(_mangle_class_name(typ)).as_pointer()
+        elif isinstance(typ, ty.MethodType):
+            return codegen.CFuncType(
+                return_type=self._type(typ.return_type),
+                parameter_types=[self._type(p.type) for p in typ.parameters],
+            )
         else:
             raise NotImplementedError(typ)
 
     def _type_str(self, typ: ty.Type) -> str:
-        if isinstance(typ, ty.ArrayType):
-            return f"{self._type_str(typ.element_type)}__array"
-        else:
-            return self._type(typ)
+        return self._type(typ).render().translate(_type_to_ident_table)
 
-    def _method_field(self, class_type: ty.ClassType, meth_name: str) -> str:
+    def _method_field(
+        self, class_type: ty.ClassType, meth_name: str
+    ) -> codegen.CStructField:
         meth_ty = class_type.instance_type.methods[meth_name]
+        c_type = self._type(meth_ty)
 
-        buf = ""
-        buf += self._type(meth_ty.return_type)
-        self_type_name = f"struct {_mangle_ident(class_type.name)}"
-        buf += f" (*{meth_ty.name})({self_type_name} *"
-        for param in meth_ty.parameters:
-            buf += ", "
-            buf += self._type(param.type)
-        buf += ")"
+        assert isinstance(c_type, codegen.CFuncType)
+        c_type.parameter_types.insert(0, self._type(class_type))
 
-        return buf
+        return codegen.CStructField(name=meth_name, type=c_type)
 
     def _method(
         self, class_type: ty.ClassType, meth_name: str, static: bool = False
-    ) -> str:
+    ) -> None:
         meth_ty = class_type.instance_type.methods[meth_name]
-        buf = ""
-
-        meth_name = _mangle_ident(class_type.name, meth_name)
-        buf += f"{self._type(meth_ty.return_type)} {meth_name}("
+        meth_name = _mangle_ident(
+            *ModulePath.from_class_path(class_type.name), meth_name
+        )
+        c_type = codegen.CFunc(
+            name=meth_name,
+            return_type=self._type(meth_ty.return_type),
+            parameters=[
+                codegen.CParam(name=p.name, type=self._type(p.type))
+                for p in meth_ty.parameters
+            ],
+        )
 
         if not static:
-            self_type_name = _mangle_ident(class_type.name)
-            buf += f"struct {self_type_name} *self"
-            if meth_ty.parameters:
-                buf += ", "
+            c_type.parameters.insert(
+                0,
+                codegen.CParam(name="self", type=self._type(class_type)),
+            )
 
-        is_first_param = True
-        for param in meth_ty.parameters:
-            if is_first_param:
-                is_first_param = False
-            else:
-                buf += ", "
-            buf += f"{self._type(param.type)} {param.name}"
-        buf += ") {"
-        self.emit(buf)
-        # FIXME: method body
-        self.emit("}")
+        c_type.emit(self)
 
-        return buf
+    def _get_or_create_array_type(
+        self, typ: ty.ArrayType
+    ) -> codegen.CStructType:
+        if typ in self._generated_array_types:
+            return self._generated_array_types[typ].type
 
-    def _get_or_create_array_type(self, typ: ty.ArrayType) -> str:
         element_type = typ.element_type
-        array_type_name = _mangle_ident(self._type_str(typ))
-        array_type_name = f"struct {array_type_name}"
-        if array_type_name in self._generated_array_types:
-            return array_type_name
-        self._generated_array_types.add(array_type_name)
-        self.emit("%s {" % array_type_name)
-        with self.indent():
-            self.emit("%s *elements;" % self._type(element_type))
-            self.emit("int length;")
-        self.emit("};")
-        return array_type_name
+        struct = codegen.CStruct(name=self._type_str(element_type) + "_array")
+        self._generated_array_types[typ] = struct
+        struct.fields.extend(
+            [
+                codegen.CStructField(
+                    name="elements", type=self._type(element_type).as_pointer()
+                ),
+                codegen.CStructField(
+                    name="length", type=codegen.CNamedType("int")
+                ),
+            ]
+        )
+        struct.emit(self)
+        return struct.type
 
 
 class MethodCodeGenerator(CodeGenerator):

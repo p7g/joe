@@ -17,34 +17,34 @@ def builtin_type(node: ast.Type) -> Option["Type"]:
         return None_()
 
 
-@dataclass
+@dataclass(frozen=True)
 class Type:
     pass
 
 
-@dataclass
+@dataclass(frozen=True)
 class VoidType(Type):
     pass
 
 
-@dataclass
+@dataclass(frozen=True)
 class IntType(Type):
     pass
 
 
-@dataclass
+@dataclass(frozen=True)
 class ArrayType(Type):
     element_type: Type
 
 
-@dataclass
+@dataclass(frozen=True)
 class Parameter:
     name: str
     type: Type
 
 
 @dataclass
-class MethodType:
+class MethodType(Type):
     name: str
     return_type: Type
     parameters: t.List[Parameter] = field(default_factory=list)

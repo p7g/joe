@@ -1,8 +1,9 @@
 import abc
 import typing as t
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
-from joe.compile import CodeGenerator
+if t.TYPE_CHECKING:
+    from joe.compile import CodeGenerator
 
 
 class CType(abc.ABC):
@@ -11,7 +12,18 @@ class CType(abc.ABC):
         ...
 
     def render_named(self, name: str) -> str:
-        return f"{self.render()} {name};"
+        return f"{self.render()} {name}"
+
+    def as_pointer(self) -> "CPointerType":
+        return CPointerType(inner_type=self)
+
+
+@dataclass
+class CPointerType(CType):
+    inner_type: CType
+
+    def render(self) -> str:
+        return f"{self.inner_type.render()}*"
 
 
 @dataclass
@@ -52,7 +64,7 @@ class CStructField:
     type: CType
 
     def render(self) -> str:
-        return self.type.render_named(self.name)
+        return f"{self.type.render_named(self.name)};"
 
 
 @dataclass  # type: ignore
@@ -60,20 +72,27 @@ class CDecl(abc.ABC):
     name: str
 
     @abc.abstractmethod
-    def emit(self, gen: CodeGenerator) -> None:
+    def emit(self, gen: "CodeGenerator") -> None:
         ...
 
 
 @dataclass
 class CStruct(CDecl):
-    fields: t.List[CStructField]
+    fields: t.List[CStructField] = field(default_factory=list)
 
-    def emit(self, gen: CodeGenerator) -> None:
+    def emit(self, gen: "CodeGenerator") -> None:
         gen.emit(f"struct {self.name} " + "{")
         with gen.indent():
             for f in self.fields:
                 gen.emit(f.render())
         gen.emit("};")
+
+    def emit_forward_decl(self, gen: "CodeGenerator") -> None:
+        gen.emit(f"struct {self.name};")
+
+    @property
+    def type(self) -> CStructType:
+        return CStructType(name=self.name)
 
 
 @dataclass
@@ -89,7 +108,7 @@ class CFunc(CDecl):
     # FIXME: body
     # body: t.List[CStatement]
 
-    def emit(self, gen: CodeGenerator) -> None:
+    def emit(self, gen: "CodeGenerator") -> None:
         params = ", ".join(
             [p.type.render_named(p.name) for p in self.parameters]
         )
@@ -104,6 +123,6 @@ class CFunc(CDecl):
 class CCodeUnit:
     decls: t.List[CDecl]
 
-    def emit(self, gen: CodeGenerator) -> None:
+    def emit(self, gen: "CodeGenerator") -> None:
         for decl in self.decls:
             decl.emit(gen)
