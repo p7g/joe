@@ -1,0 +1,5 @@
+env
+.tool-versions
+.mypy_cache
+.vim
+*/__pycache__
