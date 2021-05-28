@@ -14,6 +14,10 @@ class JoeNameError(JoeException):
     pass
 
 
+class JoeTypeError(JoeException):
+    pass
+
+
 @dataclass(frozen=True)
 class Location:
     file: str

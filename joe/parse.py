@@ -8,18 +8,12 @@ from joe.lexer import TokenType, lex
 from joe.source import Location
 from joe._utils import Peekable
 
-# worry about circular imports later
 
-# Start from Main class
-# Read every import statement and parse each file
-# Calculate ClassType and ObjectType for the class (inheritance?)
-
-
-class ModulePath:
+class ModulePath(t.List[str]):
     EXT = ".java"
 
     def __init__(self, parts: t.List[str]):
-        self._parts = parts
+        super().__init__(parts)
 
     @classmethod
     def from_file_path(cls, path: str) -> "ModulePath":
@@ -34,14 +28,11 @@ class ModulePath:
         return cls(path.split("."))
 
     def file_path(self) -> str:
-        *path, filename = self._parts
+        *path, filename = self
         return os.path.join(*path, f"{filename}{self.EXT}")
 
     def class_path(self) -> str:
-        return ".".join(self._parts)
-
-    def __iter__(self):
-        return iter(self._parts)
+        return ".".join(self)
 
 
 class Parser:
@@ -165,9 +156,8 @@ class Parser:
             self.tokens.next().expect(TokenType.RParen)
 
             self.tokens.next().expect(TokenType.LBrace)
-            # FIXME: method body
             while self.tokens.peek().type != TokenType.RBrace:
-                self.tokens.next()
+                meth.body.append(self._parse_statement())
             self.tokens.next().expect(TokenType.RBrace)
 
         return fields, methods
@@ -196,3 +186,44 @@ class Parser:
             type=ty,
             name=ast.Name(value=name.value, location=name.location),
         )
+
+    def _parse_statement(self) -> ast.Stmt:
+        tok = self.tokens.peek()
+        if tok.type == TokenType.Return:
+            tok = self.tokens.next()
+            expr = None
+            if self.tokens.peek().type != TokenType.SemiColon:
+                expr = self._parse_expr()
+            self.tokens.next().expect(TokenType.SemiColon)
+            return ast.ReturnStmt(location=tok.location, expr=expr)
+        else:
+            expr = self._parse_expr()
+            self.tokens.next().expect(TokenType.SemiColon)
+            return ast.ExprStmt(location=expr.location, expr=expr)
+
+    def _parse_expr(self) -> ast.Expr:
+        left = self._parse_atom()
+        while self.tokens.peek().type == TokenType.LParen:
+            args = []
+            is_first_arg = True
+            while self.tokens.peek().type != TokenType.RParen:
+                self.tokens.next()
+                if is_first_arg:
+                    is_first_arg = False
+                else:
+                    self.tokens.next().expect(TokenType.Comma)
+                args.append(self._parse_expr())
+            self.tokens.next().expect(TokenType.RParen)
+            left = ast.CallExpr(
+                location=left.location, target=left, arguments=args
+            )
+        return left
+
+    def _parse_atom(self) -> ast.Expr:
+        tok = self.tokens.next()
+        if tok.type == TokenType.Int:
+            return ast.IntExpr(location=tok.location, value=int(tok.value))
+        elif tok.type == TokenType.Ident:
+            return ast.IdentExpr(location=tok.location, name=tok.value)
+        else:
+            raise NotImplementedError(tok)

@@ -8,6 +8,8 @@ from joe.source import JoeNameError
 class GlobalContext:
     def __init__(self):
         self.classes: t.Dict[str, ty.ClassType] = {}
+        self.types: t.Dict[ast.Node, ty.Type] = {}
+        self.array_types: t.Set[ty.ArrayType] = set()
 
     def populate_from_modules(self, modules: t.List[ast.Module]):
         for module in modules:
@@ -23,28 +25,35 @@ class GlobalContext:
 
         instance_ty = ty.ObjectType()
         class_ty = ty.ClassType(name=mod.name, instance_type=instance_ty)
+        self.types[mod.class_decl] = class_ty
 
         for field in mod.class_decl.fields:
-            instance_ty.fields[field.name.value] = self._type_expr(
-                types_in_scope, field.type
-            )
+            field_ty = self._type_expr(types_in_scope, field.type)
+            instance_ty.fields[field.name.value] = field_ty
+            self.types[field] = field_ty
 
         for meth in mod.class_decl.methods:
             ret_ty = self._type_expr(types_in_scope, meth.return_type)
-            params = [
-                ty.Parameter(
-                    name=p.name.value,
-                    type=self._type_expr(types_in_scope, p.type),
+            self.types[meth.return_type] = ret_ty
+            params = []
+            for param in meth.parameters:
+                param_ty = self._type_expr(types_in_scope, param.type)
+                self.types[param] = param_ty
+                params.append(
+                    ty.Parameter(name=param.name.value, type=param_ty)
                 )
-                for p in meth.parameters
-            ]
             meth_ty = ty.MethodType(
-                name=meth.name.value, return_type=ret_ty, parameters=params
+                class_type=class_ty,
+                name=meth.name.value,
+                return_type=ret_ty,
+                parameters=params,
+                static=meth.static,
             )
             if meth.static:
                 class_ty.static_methods[meth.name.value] = meth_ty
             else:
                 instance_ty.methods[meth.name.value] = meth_ty
+            self.types[meth] = meth_ty
 
         return class_ty
 

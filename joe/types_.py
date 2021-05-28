@@ -45,9 +45,11 @@ class Parameter:
 
 @dataclass
 class MethodType(Type):
+    class_type: "ClassType"
+    static: bool
     name: str
     return_type: Type
-    parameters: t.List[Parameter] = field(default_factory=list)
+    parameters: t.List[Parameter]
 
 
 @dataclass
