@@ -4,6 +4,6 @@ class simple {
     }
 
     static void main() {
-        println(test(123));
+        println(test(23));
     }
 }

@@ -150,7 +150,7 @@ def lex(filename: str, contents: str) -> t.Generator[Token, None, None]:
         loc = current_location()
 
         if c.isdigit():
-            acc = ""
+            acc = c
             while True:
                 try:
                     c = peek()
