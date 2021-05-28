@@ -140,6 +140,14 @@ class CAssignmentTarget(CExpr):
 
 
 @dataclass
+class CParens(CExpr):
+    inner: CExpr
+
+    def __str__(self):
+        return f"({self.inner})"
+
+
+@dataclass
 class CVariable(CAssignmentTarget):
     name: str
 
@@ -184,7 +192,7 @@ class CFieldAccess(CAssignmentTarget):
         return f"({self.struct_value}){op}{self.field_name}"
 
 
-class AssignmentOp(enum.Enum):
+class BinOp(enum.Enum):
     Add = "+"
     Subtract = "-"
     Multiply = "*"
@@ -192,10 +200,20 @@ class AssignmentOp(enum.Enum):
 
 
 @dataclass
+class CBinExpr(CExpr):
+    left: CExpr
+    right: CExpr
+    op: BinOp
+
+    def __str__(self):
+        return f"({self.left}) {self.op.value} ({self.right})"
+
+
+@dataclass
 class CAssignmentExpr(CExpr):
     target: CAssignmentTarget
     value: CExpr
-    op: t.Optional[AssignmentOp] = None
+    op: t.Optional[BinOp] = None
 
     def __str__(self):
         if self.op is None:
@@ -214,13 +232,60 @@ class CInteger(CExpr):
 
 
 @dataclass
+class CRef(CExpr):
+    inner: CExpr
+
+    def __str__(self):
+        return f"&({self.inner})"
+
+
+@dataclass
+class CCast(CExpr):
+    value: CExpr
+    new_type: CType
+
+    def __str__(self):
+        return f"(({self.new_type.render()}) {self.value})"
+
+
+@dataclass
+class CTypeExpr(CExpr):
+    type: CType
+
+    def __str__(self):
+        return self.type.render()
+
+
+@dataclass
+class CSeqExpr(CExpr):
+    exprs: t.List[CExpr]
+
+    def __str__(self):
+        return "%s" % ", ".join([str(e) for e in self.exprs])
+
+
+@dataclass
+class CEmitOnce(CExpr):
+    first_emit: CExpr
+    after: CExpr
+    _did_emit: bool = False
+
+    def __str__(self):
+        if self._did_emit:
+            return str(self.after)
+        self._did_emit = True
+        return str(self.first_emit)
+
+
+@dataclass
 class CCallExpr(CExpr):
     target: CExpr
     arguments: t.List[CExpr]
 
     def __str__(self):
-        args = ", ".join([f"({arg})" for arg in self.arguments])
-        return f"({self.target})({args})"
+        fn = str(self.target)
+        args = ", ".join([f"{arg}" for arg in self.arguments])
+        return f"{fn}({args})"
 
 
 class CStmt(abc.ABC):

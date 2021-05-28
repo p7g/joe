@@ -1,3 +1,4 @@
+import dataclasses
 import os
 import typing as t
 from contextlib import contextmanager
@@ -47,7 +48,7 @@ def _ty_to_ctype(ctx: GlobalContext, typ: ty.Type) -> codegen.CType:
         ctx.array_types.add(typ)
         return codegen.CStructType(name=_array_type_name(ctx, typ))
     elif isinstance(typ, ty.ClassType):
-        return codegen.CStructType(_mangle_class_name(typ)).as_pointer()
+        return codegen.CStructType(_mangle_class_name(typ))
     elif isinstance(typ, ty.MethodType):
         return codegen.CFuncType(
             return_type=_ty_to_ctype(ctx, typ.return_type),
@@ -105,7 +106,8 @@ class ModuleCodeGenerator(CodeGenerator):
         super().__init__(indent_str=indent_str)
 
         # FIXME: hack
-        self._buf.append("#include <stdio.h>")
+        self.emit("#include <stdio.h>")
+        self.emit("#include <stdlib.h>")
 
         self.ctx = GlobalContext()
         self.ctx.populate_from_modules(modules)
@@ -182,6 +184,7 @@ class ModuleCodeGenerator(CodeGenerator):
             )
 
         # Generate vtable variable
+        self.emit()
         decl = codegen.CVarDecl(
             name=vtable_type.name,
             type=codegen.CStructType(name=vtable_type.name),
@@ -319,6 +322,13 @@ class MethodCodeGenerator(CodeGenerator):
             {},  # locals
         )
         self._static = static
+        self._internal_locals: t.List[t.Tuple[str, codegen.CType]] = []
+
+    def _unique_local(self, typ: codegen.CType) -> str:
+        idx = len(self._internal_locals)
+        name = f"__joe_local_{idx}"
+        self._internal_locals.append((name, typ))
+        return name
 
     def _var_name(self, base_name: str) -> str:
         return _mangle_ident(
@@ -356,6 +366,11 @@ class MethodCodeGenerator(CodeGenerator):
         for stmt in self._method.body:
             c_type.body.append(self._compile_stmt(stmt))
 
+        internal_locals: t.List[codegen.CStmt] = []
+        for loc_name, loc_ty in self._internal_locals:
+            internal_locals.append(codegen.CVarDecl(name=loc_name, type=loc_ty))
+        internal_locals.extend(c_type.body)
+        c_type.body = internal_locals
         c_type.emit(self)
 
     def _compile_stmt(self, stmt: ast.Stmt) -> codegen.CStmt:
@@ -385,7 +400,7 @@ class MethodCodeGenerator(CodeGenerator):
                             methods={},
                             fields={},
                         ),
-                        static_methods={}
+                        static_methods={},
                     ),
                     parameters=[ty.Parameter(name="", type=ty.IntType())],
                     name="println",
@@ -396,7 +411,22 @@ class MethodCodeGenerator(CodeGenerator):
                 typ = self._scope[expr.name]
                 if isinstance(typ, ty.MethodType):
                     name = _mangle_ident(
-                        *ModulePath.from_class_path(self._class_ty.name), typ.name
+                        *ModulePath.from_class_path(self._class_ty.name),
+                        typ.name,
+                    )
+                elif expr.name in self._class_ty.instance_type.fields:
+                    expr_ty = self._class_ty.instance_type.fields[expr.name]
+                    return (
+                        codegen.CFieldAccess(
+                            struct_value=codegen.CFieldAccess(
+                                struct_value=codegen.CVariable("self"),
+                                field_name="data",
+                                pointer=False,
+                            ),
+                            field_name=expr.name,
+                            pointer=True,
+                        ),
+                        expr_ty,
                     )
                 else:
                     name = self._var_name(expr.name)
@@ -411,12 +441,15 @@ class MethodCodeGenerator(CodeGenerator):
             args: t.List[codegen.CExpr] = []
 
             if not target_ty.static:
-                if self._method_ty.static:
-                    raise JoeTypeError(
-                        expr.location,
-                        "Can't call non-static method from static method",
-                    )
-                args.append(codegen.CVariable("self"))
+                if target_ty.bound_to:
+                    args.append(target_ty.bound_to)
+                else:
+                    if self._method_ty.static:
+                        raise JoeTypeError(
+                            expr.location,
+                            "Can't call non-static method from static method",
+                        )
+                    args.append(codegen.CVariable("self"))
 
             # FIXME: hack
             if target_ty.name == "println":
@@ -435,5 +468,182 @@ class MethodCodeGenerator(CodeGenerator):
                 args.append(cparam)
 
             return codegen.CCallExpr(ctarget, args), target_ty.return_type
+        elif isinstance(expr, ast.AssignExpr):
+            if not isinstance(expr.target, ast.IdentExpr):
+                raise JoeTypeError(
+                    expr.location, "Can't assign to field on that type"
+                )
+            ctarget, target_ty = self._compile_expr(expr.target)
+            cvalue, value_ty = self._compile_expr(expr.value)
+            if value_ty != target_ty:
+                raise JoeTypeError(expr.location, "Incorrect type")
+            assert isinstance(ctarget, codegen.CAssignmentTarget)
+            return (
+                codegen.CAssignmentExpr(target=ctarget, value=cvalue),
+                value_ty,
+            )
+        elif isinstance(expr, ast.PlusExpr):
+            cleft, left_ty = self._compile_expr(expr.left)
+            cright, right_ty = self._compile_expr(expr.right)
+            if left_ty != ty.IntType() or right_ty != ty.IntType():
+                loc = (
+                    expr.left.location
+                    if left_ty != ty.IntType()
+                    else expr.right.location
+                )
+                raise JoeTypeError(loc, "Can only add integers")
+            return (
+                codegen.CBinExpr(
+                    left=cleft, right=cright, op=codegen.BinOp.Add
+                ),
+                ty.IntType(),
+            )
+        elif isinstance(expr, ast.DotExpr):
+            cleft, left_ty = self._compile_expr(expr.left)
+            if not isinstance(left_ty, (ty.ClassType, ty.ObjectType)):
+                raise JoeTypeError(
+                    expr.location, "Can't access field of non-class non-object"
+                )
+            if isinstance(left_ty, ty.ClassType):
+                if expr.name not in left_ty.static_methods:
+                    raise JoeTypeError(expr.location, "No such field")
+                return (
+                    codegen.CVariable(
+                        name=_mangle_ident(
+                            *ModulePath.from_class_path(left_ty.name), expr.name
+                        )
+                    ),
+                    left_ty.static_methods[expr.name],
+                )
+            else:
+                if expr.name in left_ty.fields:
+                    return (
+                        codegen.CFieldAccess(
+                            struct_value=codegen.CFieldAccess(
+                                struct_value=cleft,
+                                field_name="data",
+                                pointer=False,
+                            ),
+                            field_name=expr.name,
+                            pointer=True,
+                        ),
+                        left_ty.fields[expr.name],
+                    )
+                elif expr.name in left_ty.methods:
+                    return (
+                        codegen.CFieldAccess(
+                            struct_value=codegen.CFieldAccess(
+                                struct_value=cleft,
+                                field_name="vtable",
+                                pointer=False,
+                            ),
+                            field_name=expr.name,
+                            pointer=True,
+                        ),
+                        dataclasses.replace(
+                            left_ty.methods[expr.name], bound_to=cleft
+                        ),
+                    )
+                else:
+                    raise JoeTypeError(expr.location, "No such field")
+        elif isinstance(expr, ast.NewExpr):
+            new_ty = self._scope.get(expr.path)
+            if new_ty is None or not isinstance(new_ty, ty.ClassType):
+                raise JoeTypeError(expr.location, "No such class")
+            cnew_ty = _ty_to_ctype(self.ctx, new_ty)
+            tmp_local = codegen.CVariable(self._unique_local(cnew_ty))
+            exprs: t.List[codegen.CExpr] = [
+                # Allocate the object data struct
+                codegen.CAssignmentExpr(
+                    target=codegen.CFieldAccess(
+                        struct_value=tmp_local,
+                        field_name="data",
+                        pointer=False,
+                    ),
+                    value=codegen.CCallExpr(
+                        target=codegen.CVariable("malloc"),
+                        arguments=[
+                            codegen.CCallExpr(
+                                target=codegen.CVariable("sizeof"),
+                                arguments=[
+                                    codegen.CTypeExpr(
+                                        codegen.CStructType(
+                                            _mangle_ident(
+                                                *ModulePath.from_class_path(
+                                                    new_ty.name
+                                                ),
+                                                "data",
+                                            ),
+                                        ),
+                                    )
+                                ],
+                            ),
+                        ],
+                    ),
+                ),
+                # Assign the vtable
+                codegen.CAssignmentExpr(
+                    target=codegen.CFieldAccess(
+                        struct_value=tmp_local,
+                        field_name="vtable",
+                        pointer=False,
+                    ),
+                    value=codegen.CRef(
+                        codegen.CVariable(
+                            _mangle_ident(
+                                *ModulePath.from_class_path(new_ty.name),
+                                "vtable",
+                            )
+                        )
+                    ),
+                ),
+            ]
+            unqualified_name = ModulePath.from_class_path(new_ty.name)[-1]
+            if unqualified_name in new_ty.instance_type.methods:
+                constructor_ty = new_ty.instance_type.methods[unqualified_name]
+
+                if len(expr.arguments) != len(constructor_ty.parameters):
+                    raise JoeTypeError(
+                        expr.location,
+                        "Wrong number of arguments to constructor",
+                    )
+
+                constructor_args: t.List[codegen.CExpr] = [tmp_local]
+                for param, arg in zip(
+                    constructor_ty.parameters, expr.arguments
+                ):
+                    cparam, param_ty = self._compile_expr(arg)
+                    if param_ty != param.type:
+                        raise JoeTypeError(
+                            arg.location, "Wrong constructor arg type"
+                        )
+                    constructor_args.append(cparam)
+
+                # Call the constructor
+                exprs.append(
+                    codegen.CCallExpr(
+                        target=codegen.CFieldAccess(
+                            struct_value=codegen.CFieldAccess(
+                                struct_value=tmp_local,
+                                field_name="vtable",
+                                pointer=False,
+                            ),
+                            field_name=ModulePath.from_class_path(new_ty.name)[
+                                -1
+                            ],
+                            pointer=True,
+                        ),
+                        arguments=constructor_args,
+                    ),
+                )
+            # Leave the object as the result of the sequence expression
+            exprs.append(tmp_local)
+            return (
+                codegen.CEmitOnce(
+                    first_emit=codegen.CParens(codegen.CSeqExpr(exprs)),
+                    after=tmp_local,
+                ),
+                new_ty.instance_type,
+            )
         else:
-            raise NotImplementedError()
+            raise NotImplementedError(expr)

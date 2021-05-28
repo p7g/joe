@@ -80,7 +80,24 @@ class Expr(Node):
 
 
 @dataclass(eq=False)
-class IdentExpr(Expr):
+class AssignmentTarget(Expr):
+    pass
+
+
+@dataclass(eq=False)
+class AssignExpr(Expr):
+    target: AssignmentTarget
+    value: Expr
+
+
+@dataclass(eq=False)
+class NewExpr(Expr):
+    path: str
+    arguments: t.List[Expr]
+
+
+@dataclass(eq=False)
+class IdentExpr(AssignmentTarget):
     name: str
 
 
@@ -93,6 +110,18 @@ class IntExpr(Expr):
 class CallExpr(Expr):
     target: Expr
     arguments: t.List[Expr]
+
+
+@dataclass(eq=False)
+class DotExpr(Expr):
+    left: Expr
+    name: str
+
+
+@dataclass(eq=False)
+class PlusExpr(Expr):
+    left: Expr
+    right: Expr
 
 
 @dataclass(eq=False)

@@ -4,6 +4,9 @@ from patina import Option, Some, None_
 
 from joe import ast
 
+if t.TYPE_CHECKING:
+    from joe import codegen
+
 
 def builtin_type(node: ast.Type) -> Option["Type"]:
     if isinstance(node, ast.NamedType):
@@ -50,6 +53,8 @@ class MethodType(Type):
     name: str
     return_type: Type
     parameters: t.List[Parameter]
+    # FIXME: hack
+    bound_to: t.Optional["codegen.CExpr"] = None
 
 
 @dataclass

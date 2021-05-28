@@ -5,7 +5,7 @@ from patina import Option, None_
 
 from joe import ast
 from joe.lexer import TokenType, lex
-from joe.source import Location
+from joe.source import Location, JoeSyntaxError
 from joe._utils import Peekable
 
 
@@ -146,13 +146,10 @@ class Parser:
             methods.append(meth)
 
             tok.expect(TokenType.LParen)
-            is_first_param = True
             while self.tokens.peek().type != TokenType.RParen:
-                if not is_first_param:
-                    self.tokens.next().expect(TokenType.Comma)
-                else:
-                    is_first_param = False
                 meth.parameters.append(self._parse_parameter())
+                if self.tokens.peek().type != TokenType.RParen:
+                    self.tokens.next().expect(TokenType.Comma)
             self.tokens.next().expect(TokenType.RParen)
 
             self.tokens.next().expect(TokenType.LBrace)
@@ -203,20 +200,41 @@ class Parser:
 
     def _parse_expr(self) -> ast.Expr:
         left = self._parse_atom()
-        while self.tokens.peek().type == TokenType.LParen:
-            args = []
-            is_first_arg = True
-            while self.tokens.peek().type != TokenType.RParen:
+        while self.tokens.peek().type != TokenType.SemiColon:
+            tok = self.tokens.peek()
+            if tok.type == TokenType.Eq:
                 self.tokens.next()
-                if is_first_arg:
-                    is_first_arg = False
-                else:
-                    self.tokens.next().expect(TokenType.Comma)
-                args.append(self._parse_expr())
-            self.tokens.next().expect(TokenType.RParen)
-            left = ast.CallExpr(
-                location=left.location, target=left, arguments=args
-            )
+                # assignment
+                if not isinstance(left, ast.AssignmentTarget):
+                    raise JoeSyntaxError(tok.location, "Unexpected equal")
+                left = ast.AssignExpr(
+                    location=left.location,
+                    target=left,
+                    value=self._parse_expr(),
+                )
+            elif tok.type == TokenType.LParen:
+                self.tokens.next()
+                args = []
+                while self.tokens.peek().type != TokenType.RParen:
+                    args.append(self._parse_expr())
+                    if self.tokens.peek().type != TokenType.RParen:
+                        self.tokens.next().expect(TokenType.Comma)
+                self.tokens.next().expect(TokenType.RParen)
+                left = ast.CallExpr(
+                    location=left.location, target=left, arguments=args
+                )
+            elif tok.type == TokenType.Plus:
+                self.tokens.next()
+                left = ast.PlusExpr(left.location, left, self._parse_expr())
+            elif tok.type == TokenType.Dot:
+                self.tokens.next()
+                left = ast.DotExpr(
+                    location=left.location,
+                    left=left,
+                    name=self.tokens.next().expect(TokenType.Ident).value,
+                )
+            else:
+                break
         return left
 
     def _parse_atom(self) -> ast.Expr:
@@ -225,5 +243,21 @@ class Parser:
             return ast.IntExpr(location=tok.location, value=int(tok.value))
         elif tok.type == TokenType.Ident:
             return ast.IdentExpr(location=tok.location, name=tok.value)
+        elif tok.type == TokenType.New:
+            new_tok = tok
+            path = self.tokens.next().expect(TokenType.Ident).value
+            while self.tokens.peek().type != TokenType.LParen:
+                self.tokens.next().expect(TokenType.Dot)
+                path += f".{self.tokens.next().expect(TokenType.Ident).value}"
+            self.tokens.next().expect(TokenType.LParen)
+            args = []
+            while self.tokens.peek().type != TokenType.RParen:
+                args.append(self._parse_expr())
+                if self.tokens.peek().type != TokenType.RParen:
+                    self.tokens.next().expect(TokenType.Comma)
+            self.tokens.next().expect(TokenType.RParen)
+            return ast.NewExpr(
+                location=new_tok.location, path=path, arguments=args
+            )
         else:
             raise NotImplementedError(tok)

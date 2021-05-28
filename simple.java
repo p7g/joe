@@ -1,9 +1,15 @@
 class simple {
-    static int test(int a) {
-        return a;
+    int _n;
+
+    simple(int n) {
+        _n = n;
+    }
+
+    int test(int a) {
+        return a + _n;
     }
 
     static void main() {
-        println(test(23));
+        println(new simple(123).test(234));
     }
 }

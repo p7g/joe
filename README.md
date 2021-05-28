@@ -10,9 +10,6 @@ generates a data struct and a vtable struct (and variable) per class.
 
 [1]: https://www.youtube.com/watch?v=xcygqF5LVmM
 
-Unfortunately compilation of `new` expressions is not yet implemented, so
-trying out method dispatching isn't yet possible lol
-
 ## What's the plan?
 
 What's a plan?
@@ -35,31 +32,41 @@ file right now:
 
 ```c
 #include <stdio.h>
+#include <stdlib.h>
 /* start module simple */
 struct __joe6simple4dataE {
+    int _n;
 };
 struct __joe6simpleE;
 struct __joe6simple6vtableE {
+    void (*simple)(struct __joe6simpleE, int);
+    int (*test)(struct __joe6simpleE, int);
 };
 struct __joe6simpleE {
     struct __joe6simple4dataE* data;
     struct __joe6simple6vtableE* vtable;
 };
-struct __joe6simple6vtableE __joe6simple6vtableE = {};
 
-int __joe6simple4testE(int __joe6simple4test1aE) {
-    return __joe6simple4test1aE;
+void __joe6simple6simpleE(struct __joe6simpleE self, int __joe6simple6simple1nE) {
+    (((self).data)->_n) = (__joe6simple6simple1nE);
 }
 
+int __joe6simple4testE(struct __joe6simpleE self, int __joe6simple4test1aE) {
+    return (__joe6simple4test1aE) + (((self).data)->_n);
+}
+
+struct __joe6simple6vtableE __joe6simple6vtableE = {__joe6simple6simpleE, __joe6simple4testE};
+
 void __joe6simple4mainE() {
-    (printf)(("%d\n"), ((__joe6simple4testE)((23))));
+    struct __joe6simpleE __joe_local_0;
+    printf("%d\n", (((((__joe_local_0).data) = (malloc(sizeof(struct __joe6simple4dataE))), ((__joe_local_0).vtable) = (&(__joe6simple6vtableE)), ((__joe_local_0).vtable)->simple(__joe_local_0, 123), __joe_local_0)).vtable)->test(__joe_local_0, 234));
 }
 
 int main() {
-    (__joe6simple4mainE)();
+    __joe6simple4mainE();
     return 0;
 }
 /* end module simple */
 ```
 
-It's not pretty, but it does compile, and it sure does print `23\n` :sunglasses:
+It's not pretty, but it does compile, and it sure does print `357\n` :sunglasses:
