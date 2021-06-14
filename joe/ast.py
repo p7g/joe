@@ -102,6 +102,12 @@ class IdentExpr(AssignmentTarget):
 
 
 @dataclass(eq=False)
+class DotExpr(AssignmentTarget):
+    left: Expr
+    name: str
+
+
+@dataclass(eq=False)
 class IntExpr(Expr):
     value: int
 
@@ -110,12 +116,6 @@ class IntExpr(Expr):
 class CallExpr(Expr):
     target: Expr
     arguments: t.List[Expr]
-
-
-@dataclass(eq=False)
-class DotExpr(Expr):
-    left: Expr
-    name: str
 
 
 @dataclass(eq=False)

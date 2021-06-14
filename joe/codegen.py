@@ -73,6 +73,10 @@ class CDecl(abc.ABC):
     name: str
 
     @abc.abstractmethod
+    def emit_forward_decl(self, gen: "CodeGenerator") -> None:
+        ...
+
+    @abc.abstractmethod
     def emit(self, gen: "CodeGenerator") -> None:
         ...
 
@@ -108,11 +112,18 @@ class CFunc(CDecl):
     parameters: t.List[CParam]
     body: t.List["CStmt"]
 
-    def emit(self, gen: "CodeGenerator") -> None:
+    def _proto(self) -> str:
         params = ", ".join(
             [p.type.render_named(p.name) for p in self.parameters]
         )
-        proto = f"{self.return_type.render()} {self.name}({params})"
+        return f"{self.return_type.render()} {self.name}({params})"
+
+    def emit_forward_decl(self, gen: "CodeGenerator") -> None:
+        proto = self._proto()
+        gen.emit(f"{proto};")
+
+    def emit(self, gen: "CodeGenerator") -> None:
+        proto = self._proto()
         gen.emit("%s {" % proto)
         with gen.indent():
             for stmt in self.body:
@@ -123,6 +134,10 @@ class CFunc(CDecl):
 @dataclass
 class CCodeUnit:
     decls: t.List[CDecl]
+
+    def emit_forward_decl(self, gen: "CodeGenerator") -> None:
+        for decl in self.decls:
+            decl.emit_forward_decl(gen)
 
     def emit(self, gen: "CodeGenerator") -> None:
         for decl in self.decls:
@@ -261,6 +276,7 @@ class CSeqExpr(CExpr):
     exprs: t.List[CExpr]
 
     def __str__(self):
+        # If only 1 expr, same as str(exprs[0])
         return "%s" % ", ".join([str(e) for e in self.exprs])
 
 
@@ -307,6 +323,9 @@ class CVarDecl(CStmt, CDecl):
     name: str
     type: CType
     value: t.Optional[CExpr] = None
+
+    def emit_forward_decl(self, gen: "CodeGenerator") -> None:
+        gen.emit(f"{self.type.render_named(self.name)};")
 
     def emit(self, gen: "CodeGenerator") -> None:
         if self.value:

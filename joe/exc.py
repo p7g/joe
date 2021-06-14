@@ -1,0 +1,2 @@
+class JoeUnreachable(Exception):
+    pass

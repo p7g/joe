@@ -1,5 +1,7 @@
 env
+_env
 .tool-versions
+.ccls-cache
 .mypy_cache
 .vim
 */__pycache__

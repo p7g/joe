@@ -12,4 +12,6 @@ class simple {
     static void main() {
         println(new simple(123).test(234));
     }
+
+    static void println(int n) {}
 }
