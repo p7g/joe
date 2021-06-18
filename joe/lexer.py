@@ -65,7 +65,7 @@ class Token:
     def expect(self, type: TokenType) -> "Token":
         if self.type != type:
             raise JoeSyntaxError(
-                self.location, f"Expected {type}, got {self.type}"
+                self.location, f"Expected {type.name}, got {self.type.name}"
             )
         return self
 
