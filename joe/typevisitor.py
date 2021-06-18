@@ -49,6 +49,8 @@ class TypeVisitor(Visitor):
 
 
 class ClassDeclarationVisitor(Visitor):
+    _self_type_placeholder = typesys.PlaceholderType()
+
     def __init__(self, type_scope: t.Mapping[str, TypeOrClass]):
         self.methods: t.Dict[str, typesys.Function] = {}
         self.fields: t.Dict[str, typesys.Type] = {}
@@ -68,16 +70,31 @@ class ClassDeclarationVisitor(Visitor):
         assert vis.superclass is None or isinstance(
             vis.superclass, typesys.ClassInstance
         )
-        return typesys.Class(
+        cls_ty = typesys.Class(
             id_=vis.class_id,
             type_parameters=[],
             members=vis.fields,
             methods=vis.methods,
             superclass=vis.superclass,
         )
+        for name, member in cls_ty.members.items():
+            if member is cls._self_type_placeholder:
+                cls_ty.members[name] = typesys.ClassInstance(cls_ty, [])
+        for method in cls_ty.methods.values():
+            if method.return_type is cls._self_type_placeholder:
+                method.return_type = typesys.ClassInstance(cls_ty, [])
+            for i, param in enumerate(method.formal_parameters):
+                if param is cls._self_type_placeholder:
+                    method.formal_parameters[i] = typesys.ClassInstance(
+                        cls_ty, []
+                    )
+        return cls_ty
 
     def analyze_type(self, node: ast.Type) -> typesys.Type:
-        return TypeVisitor.analyze(self._type_scope, node)
+        scope = self._type_scope.copy()
+        assert self.class_id is not None
+        scope[self.class_id.name] = self._self_type_placeholder
+        return TypeVisitor.analyze(scope, node)
 
     def visit_ClassDeclaration(self, node: ast.ClassDeclaration):
         self.class_id = typesys.ClassID(node.name.value)
