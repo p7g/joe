@@ -149,7 +149,7 @@ class Class(TypeConstructor):
         )
 
     def __eq__(self, other):
-        if isinstance(other, Class):
+        if isinstance(other, Class):  # type: ignore
             return self.id == other.id
         return NotImplemented
 
@@ -201,7 +201,7 @@ class Function(TypeConstructor):
         )
 
     def __eq__(self, other):
-        if isinstance(other, Function):
+        if isinstance(other, Function):  # type: ignore
             return self.id == other.id
         return NotImplemented
 
@@ -240,7 +240,7 @@ class VoidType(Type):
         return self
 
     def __eq__(self, other):
-        if isinstance(other, VoidType):
+        if isinstance(other, VoidType):  # type: ignore
             return True
         return NotImplemented
 
@@ -260,7 +260,7 @@ class TypeVar(Type):
         return scope.get(self, self)
 
     def __eq__(self, other):
-        if isinstance(other, TypeVar):
+        if isinstance(other, TypeVar):  # type: ignore
             return self is other
         return NotImplemented
 
@@ -276,7 +276,7 @@ class IntType(Type):
         return self
 
     def __eq__(self, other):
-        if isinstance(other, IntType):
+        if isinstance(other, IntType):  # type: ignore
             return True
         return NotImplemented
 
@@ -295,7 +295,7 @@ class DoubleType(Type):
         return self
 
     def __eq__(self, other):
-        if isinstance(other, DoubleType):
+        if isinstance(other, DoubleType):  # type: ignore
             return True
         return NotImplemented
 
@@ -337,8 +337,10 @@ class Instance(Type, abc.ABC):
         return self.__class__(concrete_tycon, [])
 
     def __eq__(self, other):
-        if isinstance(other, Instance):
-            return self.concretize({}).tycon == other.concretize({}).tycon
+        if isinstance(other, Instance):  # type: ignore
+            if not self.arguments and not other.arguments:
+                return self.tycon == other.tycon
+            return self.concretize({}) == other.concretize({})
         return NotImplemented
 
     def __repr__(self) -> str:

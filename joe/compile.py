@@ -1,666 +1,446 @@
-import dataclasses
-import os
 import typing as t
-from contextlib import contextmanager
-
-from joe import ast, codegen, typesys
+from joe import ast, cnodes, typesys
 from joe.context import GlobalContext
 from joe.exc import JoeUnreachable
 from joe.parse import ModulePath
-from joe.source import JoeTypeError
 from joe.typevisitor import MethodExprTypeVisitor
+from joe.visitor import Visitor
+from patina import Option, None_
 
 
-# FIXME: name mangling for int[] is not great
-def _mangle_ident(*parts: str) -> str:
-    ident = "__joe"
-    for part in parts:
-        ident += f"{len(part)}{part}"
-    return f"{ident}E"
+def get_class_name(class_: typesys.Class) -> cnodes.CMangledName:
+    # TODO: encode generic arguments in name
+    return cnodes.CMangledName(ModulePath.from_class_path(class_.id.name))
 
 
-def _mangle_class_name(class_ty: typesys.Class) -> str:
-    # FIXME: Properly mangle class and function IDs to support generics
-    return _mangle_ident(*ModulePath.from_class_path(class_ty.id.name))
+def get_class_member_name(
+    class_: typesys.Class, member: str
+) -> cnodes.CMangledName:
+    name = get_class_name(class_)
+    name.parts.append(member)
+    return name
 
 
-_type_to_ident_table = str.maketrans(
-    {
-        "*": "_ptr",
-        " ": "_",
-        "[": "_array",
-        "]": "_",
-    }
-)
+def get_class_data_name(class_: typesys.Class) -> cnodes.CMangledName:
+    name = get_class_name(class_)
+    # Prefix with number to avoid conflicts with identifiers
+    name.parts.append("0data")
+    return name
 
 
-# def _array_type_name(ctx: GlobalContext, typ: ty.ArrayType) -> str:
-#     return _mangle_ident(_type_str(ctx, typ.element_type) + "_array")
+def get_class_vtable_name(class_: typesys.Class) -> cnodes.CMangledName:
+    name = get_class_name(class_)
+    # Prefix with number to avoid conflicts with identifiers
+    name.parts.append("0vtable")
+    return name
 
 
-def _type_str(ctx: GlobalContext, typ: typesys.Type) -> str:
-    return _ty_to_ctype(ctx, typ).render().translate(_type_to_ident_table)
-
-
-def _ty_to_ctype(ctx: GlobalContext, typ: typesys.Type) -> codegen.CType:
+def get_ctype(typ: typesys.Type) -> cnodes.CType:
     if isinstance(typ, typesys.IntType):
-        return codegen.CNamedType("int")
+        return cnodes.CNamedType(cnodes.CUnmangledName("int"))
     elif isinstance(typ, typesys.VoidType):
-        return codegen.CNamedType("void")
-    # elif isinstance(typ, ty.ArrayType):
-    #     ctx.array_types.add(typ)
-    #     return codegen.CStructType(name=_array_type_name(ctx, typ))
+        return cnodes.CNamedType(cnodes.CUnmangledName("void"))
     elif isinstance(typ, typesys.ClassInstance):
-        return codegen.CStructType(_mangle_class_name(typ.class_))
+        return cnodes.CStructType(get_class_name(typ.class_))
     elif isinstance(typ, typesys.FunctionInstance):
-        return codegen.CFuncType(
-            return_type=_ty_to_ctype(ctx, typ.function.return_type),
+        return cnodes.CFuncType(
+            return_type=get_ctype(typ.function.return_type),
             parameter_types=[
-                _ty_to_ctype(ctx, p) for p in typ.function.formal_parameters
+                get_ctype(p) for p in typ.function.formal_parameters
             ],
         )
     else:
         raise NotImplementedError(typ)
 
 
-# Global types include all classes, named types (fully-qualified)
-#   -> possible to distinguish a.b.C from property access by checking for a
-#      value called `a` in scope
-# Module-level types extend global types including imported ones
-
-# Separate scope for variables
-# Method scope is top-level, includes class fields, then parameters, then
-# locals.
+def get_self() -> cnodes.CExpr:
+    return cnodes.CVariable(cnodes.CUnmangledName("self"))
 
 
-class CodeGenerator:
-    def __init__(self, indent_str: str = "    "):
-        self._indent_level = 0
-        self._buf: t.List[str] = []
-        self._indent_str = indent_str
-
-    def __indent(self) -> t.Generator[None, None, None]:
-        self._indent_level += 1
-        yield
-        self._indent_level -= 1
-
-    indent = t.cast(
-        t.Callable[["CodeGenerator"], t.ContextManager[None]],
-        contextmanager(__indent),
+def get_member(
+    struct: cnodes.CExpr, name: str, pointer: bool = False
+) -> cnodes.CAssignmentTarget:
+    return cnodes.CFieldAccess(
+        struct_value=struct,
+        field_name=cnodes.CUnmangledName(name),
+        pointer=pointer,
     )
 
-    def emit(self, *lines: str) -> None:
-        if not lines:
-            self._buf.append("")
-        else:
-            self._buf.extend(
-                self._indent_level * self._indent_str + line for line in lines
-            )
 
-    def get(self) -> str:
-        return os.linesep.join(self._buf)
+def get_data_member(obj: cnodes.CExpr, name: str) -> cnodes.CAssignmentTarget:
+    # like: obj.data->field_name
+    return get_member(get_member(obj, "data"), name, pointer=True)
 
 
-class ModuleCodeGenerator(CodeGenerator):
-    def __init__(
-        self,
-        modules: t.List[ast.Module],
-        main_method: t.Optional[str] = None,
-        indent_str: str = "    ",
-    ):
-        super().__init__(indent_str=indent_str)
+def get_vtable_member(obj: cnodes.CExpr, name: str) -> cnodes.CAssignmentTarget:
+    # like: obj.vtable->field_name
+    return get_member(get_member(obj, "vtable"), name, pointer=True)
 
-        # FIXME: hack
-        self.emit("#include <stdio.h>")
-        self.emit("#include <stdlib.h>")
 
-        self.ctx = GlobalContext()
-        self.ctx.populate_from_modules(modules)
-        self._modules = modules
-        # self._generated_array_types: t.Dict[ty.ArrayType, codegen.CStruct] = {}
-        self._main_method = main_method
+def get_self_data_member(name: str) -> cnodes.CAssignmentTarget:
+    return get_data_member(get_self(), name)
 
-    def generate(self):
-        for mod in self._modules:
-            self.emit(f"/* start module {mod.name} */")
-            self._generate_class(mod)
-            self.emit(f"/* end module {mod.name} */")
-            self.emit()
 
-    def _generate_class(self, mod: ast.Module) -> None:
-        class_path = mod.name
-        class_path_parts = ModulePath.from_class_path(class_path)
-        class_type = self.ctx.type_scope[class_path]
-        assert isinstance(class_type, typesys.Class)
+def get_self_vtable_member(name: str) -> cnodes.CAssignmentTarget:
+    return get_vtable_member(get_self(), name)
 
-        # forward-declare static methods
-        for meth_name, meth in class_type.methods.items():
-            if not meth.static:
-                continue
-            self.emit()
-            c_type = codegen.CFunc(
-                name=_mangle_ident(
-                    *ModulePath.from_class_path(class_type.id.name),
-                    meth_name,
-                ),
-                return_type=_ty_to_ctype(self.ctx, meth.return_type),
-                parameters=[
-                    codegen.CParam(
-                        name="",
-                        type=_ty_to_ctype(self.ctx, p_type),
-                    )
-                    for p_type in meth.formal_parameters
-                ],
-                body=[],
-            )
-            c_type.emit_forward_decl(self)
 
-        # Generate data struct type
-        data_type = codegen.CStruct(
-            name=_mangle_ident(*class_path_parts, "data")
-        )
-        # for name, field_ty in class_type.instance_type.fields.items():
-        #     if isinstance(field_ty, ty.ArrayType):
-        #         self._get_or_create_array_type(field_ty)
-        #         self.emit()
+def get_local_name(name: str) -> cnodes.CName:
+    return cnodes.CMangledName([name])
 
-        for name, field_ty in class_type.members.items():
-            data_type.fields.append(
-                codegen.CStructField(
-                    name=name, type=_ty_to_ctype(self.ctx, field_ty)
-                )
-            )
 
-        data_type.emit(self)
+def make_assign_stmt(
+    dest: cnodes.CAssignmentTarget, value: cnodes.CExpr
+) -> cnodes.CStmt:
+    return cnodes.CExprStmt(cnodes.CAssignmentExpr(dest, value))
 
-        # Forward declaration for object struct type
-        object_type = codegen.CStruct(name=_mangle_ident(*class_path_parts))
-        object_type.emit_forward_decl(self)
 
-        # Generate vtable struct type
-        vtable_type = codegen.CStruct(
-            name=_mangle_ident(*class_path_parts, "vtable")
-        )
-        for name, meth in class_type.methods.items():
-            if not meth.static:
-                vtable_type.fields.append(self._method_field(class_type, name))
-        vtable_type.emit(self)
-
-        # Generate object type struct
-        object_type.fields.extend(
-            [
-                codegen.CStructField(
-                    name="data", type=data_type.type.as_pointer()
-                ),
-                codegen.CStructField(
-                    name="vtable", type=vtable_type.type.as_pointer()
-                ),
-            ]
-        )
-        object_type.emit(self)
-
-        # Generate method implementations
-        for name, meth in class_type.methods.items():
-            if meth.static:
-                continue
-            self.emit()
-            self._method(
-                class_type=class_type,
-                meth_name=name,
-                method=next(
-                    m for m in mod.class_decl.methods if m.name.value == name
-                ),
-            )
-
-        # Generate vtable variable
-        self.emit()
-        decl = codegen.CVarDecl(
-            name=vtable_type.name,
-            type=codegen.CStructType(name=vtable_type.name),
-            value=codegen.CArrayLiteral(
-                elements=[
-                    codegen.CVariable(
-                        _mangle_ident(
-                            *ModulePath.from_class_path(class_type.id.name),
-                            meth_name,
-                        )
-                    )
-                    for meth_name, meth in class_type.methods.items()
-                    if not meth.static
-                ],
+def make_malloc(type_: cnodes.CType) -> cnodes.CExpr:
+    return cnodes.CCallExpr(
+        target=cnodes.CVariable(cnodes.CUnmangledName("malloc")),
+        arguments=[
+            cnodes.CCallExpr(
+                target=cnodes.CVariable(cnodes.CUnmangledName("sizeof")),
+                arguments=[cnodes.CTypeExpr(type_)],
             ),
-        )
-        decl.emit(self)
+        ],
+    )
 
-        # emit static methods
-        for meth_name, meth in class_type.methods.items():
-            if not meth.static:
-                continue
-            self.emit()
-            self._method(
-                class_type=class_type,
-                meth_name=meth_name,
-                method=next(
-                    m
-                    for m in mod.class_decl.methods
-                    if m.static and m.name.value == meth_name
-                ),
-                static=True,
-            )
 
-        # generate main method
-        if self._main_method:
-            class_path, meth_name = self._main_method.rsplit(".")
-            cls_ty = self.ctx.type_scope[class_path]
-            if not isinstance(cls_ty, typesys.Class):
-                # FIXME: Another exception type?
-                raise Exception(f"Invalid class for main method: {class_path}")
-            meth_ty = cls_ty.get_method(meth_name)
-            if meth_ty is None:
-                raise Exception(f"No such method: {meth_name}")
-            if (
-                not isinstance(meth.return_type, typesys.VoidType)
-                or not meth_ty.static
-                or meth_ty.formal_parameters
-            ):
-                raise Exception(
-                    f"Invalid signature for main method: {meth_name}"
+class CompileVisitor(Visitor):
+    def __init__(self, ctx: GlobalContext) -> None:
+        self.ctx = ctx
+        self.code_unit = cnodes.CCodeUnit()
+        self.code_unit.includes.append("stdlib.h")
+        self.class_stack: t.List[typesys.Class] = []
+
+    def visit_ClassDeclaration(self, node: ast.ClassDeclaration) -> None:
+        class_ty = self.ctx.type_scope[node.name.value]
+        assert isinstance(class_ty, typesys.Class)
+        self.class_stack.append(class_ty)
+
+        data_ctype = cnodes.CStruct(name=get_class_data_name(class_ty))
+        for name, field_ty in class_ty.members.items():
+            data_ctype.fields.append(
+                cnodes.CStructField(
+                    name=cnodes.CUnmangledName(name),
+                    type=get_ctype(field_ty),
                 )
-            main_method = _mangle_ident(
-                *ModulePath.from_class_path(self._main_method)
             )
-            main_func = codegen.CFunc(
-                name="main",
-                return_type=codegen.CNamedType("int"),
-                parameters=[],
-                body=[
-                    codegen.CExprStmt(
-                        codegen.CCallExpr(
-                            target=codegen.CVariable(main_method),
-                            arguments=[],
+
+        vtable_ctype = cnodes.CStruct(name=get_class_vtable_name(class_ty))
+        for name, meth_ty in class_ty.methods.items():
+            if not meth_ty.static:
+                meth_cty = get_ctype(typesys.FunctionInstance(meth_ty, []))
+                assert isinstance(meth_cty, cnodes.CFuncType)
+                meth_cty.parameter_types.insert(
+                    0, get_ctype(typesys.ClassInstance(class_ty, []))
+                )
+                vtable_ctype.fields.append(
+                    cnodes.CStructField(
+                        name=cnodes.CUnmangledName(name), type=meth_cty
+                    )
+                )
+
+        class_ctype = cnodes.CStruct(
+            name=get_class_name(class_ty),
+            fields=[
+                cnodes.CStructField(
+                    name=cnodes.CUnmangledName("data"),
+                    type=data_ctype.type.as_pointer(),
+                ),
+                cnodes.CStructField(
+                    name=cnodes.CUnmangledName("vtable"),
+                    type=vtable_ctype.type.as_pointer(),
+                ),
+            ],
+        )
+
+        self.code_unit.classes.append(
+            cnodes.CClassDecl(
+                data_type=data_ctype,
+                vtable_type=vtable_ctype,
+                class_type=class_ctype,
+            )
+        )
+
+        # Visit methods
+        super().visit_ClassDeclaration(node)
+
+        self.code_unit.variables.append(
+            cnodes.CVarDecl(
+                name=vtable_ctype.name,
+                type=vtable_ctype.type,
+                value=cnodes.CArrayLiteral(
+                    [
+                        cnodes.CVariable(
+                            get_class_member_name(class_ty, meth_name)
                         )
-                    ),
-                    codegen.CReturnStmt(codegen.CInteger(0)),
-                ],
+                        for meth_name, meth_ty in class_ty.methods.items()
+                        if not meth_ty.static
+                    ]
+                ),
             )
-            self.emit()
-            main_func.emit(self)
-
-    def _method_field(
-        self, class_type: typesys.Class, meth_name: str
-    ) -> codegen.CStructField:
-        meth_ty = class_type.methods[meth_name]
-        assert not meth_ty.static
-        c_type = _ty_to_ctype(self.ctx, typesys.FunctionInstance(meth_ty, []))
-
-        assert isinstance(c_type, codegen.CFuncType)
-        c_type.parameter_types.insert(
-            0, _ty_to_ctype(self.ctx, typesys.ClassInstance(class_type, []))
         )
 
-        return codegen.CStructField(name=meth_name, type=c_type)
+        self.class_stack.pop()
 
-    def _method(
-        self,
-        class_type: typesys.Class,
-        meth_name: str,
-        method: ast.Method,
-        static: bool = False,
-    ) -> None:
-        meth_ty = class_type.methods[meth_name]
+    def visit_Method(self, node: ast.Method) -> None:
+        class_ty = self.class_stack[-1]
+        meth_ty = class_ty.get_method(node.name.value)
+        assert meth_ty is not None
 
-        method_cg = MethodCodeGenerator(
-            self.ctx,
-            class_ty=class_type,
-            meth_ty=meth_ty,
-            method=method,
-            indent_str=self._indent_str,
+        comp = MethodCompiler(self.ctx, class_ty, meth_ty, node)
+        comp.run()
+        func = comp.cfunction.take().unwrap()
+        self.code_unit.functions.append(func)
+
+    def compile_main_function(self, name: str):
+        class_path, meth_name = name.rsplit(".")
+        cls_ty = self.ctx.type_scope[class_path]
+        if not isinstance(cls_ty, typesys.Class):
+            # FIXME: Another exception type?
+            raise Exception(f"Invalid class for main method: {class_path}")
+        meth_ty = cls_ty.get_method(meth_name)
+        if meth_ty is None:
+            raise Exception(f"No such method: {meth_name}")
+        if (
+            not isinstance(meth_ty.return_type, typesys.VoidType)
+            or not meth_ty.static
+            or meth_ty.formal_parameters
+        ):
+            raise Exception(
+                f"Invalid signature for main method: {meth_name}"
+            )
+        main_name = get_class_member_name(cls_ty, meth_name)
+        main_func = cnodes.CFunc(
+            name=cnodes.CUnmangledName("main"),
+            return_type=cnodes.CNamedType(cnodes.CUnmangledName("int")),
+            parameters=[],
+            locals=[],
+            body=[
+                cnodes.CExprStmt(
+                    cnodes.CCallExpr(
+                        target=cnodes.CVariable(main_name),
+                        arguments=[],
+                    )
+                ),
+                cnodes.CReturnStmt(cnodes.CInteger(0)),
+            ],
         )
-
-        method_cg.generate()
-        self._buf += method_cg._buf
-
-    # FIXME: need to generate array types for all in GlobalContext at the end
-    # def _get_or_create_array_type(
-    #     self, typ: ty.ArrayType
-    # ) -> codegen.CStructType:
-    #     if typ in self._generated_array_types:
-    #         return self._generated_array_types[typ].type
-
-    #     element_type = typ.element_type
-    #     struct = codegen.CStruct(name=_array_type_name(self.ctx, typ))
-    #     self._generated_array_types[typ] = struct
-    #     struct.fields.extend(
-    #         [
-    #             codegen.CStructField(
-    #                 name="elements",
-    #                 type=_ty_to_ctype(self.ctx, element_type).as_pointer(),
-    #             ),
-    #             codegen.CStructField(
-    #                 name="length", type=codegen.CNamedType("int")
-    #             ),
-    #         ]
-    #     )
-    #     struct.emit(self)
-    #     return struct.type
+        self.code_unit.functions.append(main_func)
 
 
-class MethodCodeGenerator(CodeGenerator):
+class MethodCompiler(Visitor):
     def __init__(
         self,
         ctx: GlobalContext,
         class_ty: typesys.Class,
         meth_ty: typesys.Function,
-        method: ast.Method,
-        indent_str: str = "    ",
-    ):
-        super().__init__(indent_str)
+        meth_node: ast.Method,
+    ) -> None:
         self.ctx = ctx
-        self._class_ty = class_ty
-        self._method = method
-        self._method_ty = meth_ty
-        vis = MethodExprTypeVisitor(ctx.type_scope, class_ty, meth_ty, method)
-        vis.visit(method)
-        self._node_types = vis.expr_types
-        self._internal_locals: t.List[t.Tuple[str, codegen.CType]] = []
-
-    def _unique_local(self, typ: codegen.CType) -> str:
-        idx = len(self._internal_locals)
-        name = f"__joe_local_{idx}"
-        self._internal_locals.append((name, typ))
-        return name
-
-    def _var_name(self, base_name: str) -> str:
-        return _mangle_ident(
-            *ModulePath.from_class_path(self._class_ty.id.name),
-            self._method.name.value,
-            base_name,
+        self.class_ty = class_ty
+        self.meth_ty = meth_ty
+        self.meth_node = meth_node
+        self.cfunction: Option[cnodes.CFunc] = None_()
+        vis = MethodExprTypeVisitor(
+            ctx.type_scope,
+            class_ty,
+            meth_ty,
+            meth_node,
         )
+        vis.visit(meth_node)
+        self.expr_types: t.Dict[ast.Node, typesys.Type] = vis.expr_types
+        self.last_expr: Option[cnodes.CExpr] = None_()
+        self.receiver: Option[cnodes.CExpr] = None_()
 
-    def generate(self) -> None:
-        meth_name = _mangle_ident(
-            *ModulePath.from_class_path(self._class_ty.id.name),
-            self._method.name.value,
-        )
-        c_type = codegen.CFunc(
-            name=meth_name,
-            return_type=_ty_to_ctype(self.ctx, self._method_ty.return_type),
+    def new_variable(self, type_: typesys.Type) -> cnodes.CAssignmentTarget:
+        locs = self.cfunction.unwrap().locals
+        new_loc_name = cnodes.CUnmangledName(f"__joe_local_{len(locs)}")
+        locs.append(cnodes.CVarDecl(name=new_loc_name, type=get_ctype(type_)))
+        return cnodes.CVariable(new_loc_name)
+
+    def cache_in_local(
+        self, expr: cnodes.CExpr, type_: typesys.Type
+    ) -> cnodes.CExpr:
+        if isinstance(type_, typesys.VoidType):
+            return expr
+        var = self.new_variable(type_)
+        self.cfunction.unwrap().body.append(make_assign_stmt(var, expr))
+        return var
+
+    def run(self) -> None:
+        self.visit(self.meth_node)
+
+    def visit_Method(self, node: ast.Method) -> None:
+        func = cnodes.CFunc(
+            name=get_class_member_name(self.class_ty, node.name.value),
+            return_type=get_ctype(self.meth_ty.return_type),
             parameters=[
-                codegen.CParam(
-                    name=self._var_name(p_node.name.value),
-                    type=_ty_to_ctype(self.ctx, p_type),
+                cnodes.CParam(
+                    name=get_local_name(param.name.value),
+                    type=get_ctype(ty),
                 )
-                for p_node, p_type in zip(
-                    self._method.parameters, self._method_ty.formal_parameters
+                for param, ty in zip(
+                    node.parameters, self.meth_ty.formal_parameters
                 )
             ],
+            locals=[],
             body=[],
         )
 
-        if not self._method.static:
-            c_type.parameters.insert(
+        if not node.static:
+            func.parameters.insert(
                 0,
-                codegen.CParam(
-                    name="self",
-                    type=_ty_to_ctype(
-                        self.ctx, typesys.ClassInstance(self._class_ty, [])
-                    ),
+                cnodes.CParam(
+                    name=cnodes.CUnmangledName("self"),
+                    type=get_ctype(typesys.ClassInstance(self.class_ty, [])),
                 ),
             )
 
-        for stmt in self._method.body:
-            c_type.body.append(self._compile_stmt(stmt))
+        self.cfunction.replace(func)
 
-        internal_locals: t.List[codegen.CStmt] = []
-        for loc_name, loc_ty in self._internal_locals:
-            internal_locals.append(codegen.CVarDecl(name=loc_name, type=loc_ty))
-        internal_locals.extend(c_type.body)
-        c_type.body = internal_locals
-        c_type.emit(self)
+        # Visit statements
+        super().visit_Method(node)
 
-    def _compile_stmt(self, stmt: ast.Stmt) -> codegen.CStmt:
-        if isinstance(stmt, ast.ExprStmt):
-            expr = self._compile_expr(stmt.expr)
-            return codegen.CExprStmt(expr)
-        elif isinstance(stmt, ast.ReturnStmt):
-            if stmt.expr:
-                cexpr: t.Optional[codegen.CExpr] = self._compile_expr(stmt.expr)
-            else:
-                cexpr = None
-            return codegen.CReturnStmt(cexpr)
-        raise NotImplementedError(stmt)
+    def visit_ExprStmt(self, node: ast.ExprStmt) -> None:
+        super().visit_ExprStmt(node)
+        self.cfunction.unwrap().body.append(
+            cnodes.CExprStmt(self.last_expr.take().unwrap())
+        )
 
-    def _compile_expr(self, expr: ast.Expr) -> codegen.CExpr:
-        if isinstance(expr, ast.IdentExpr):
-            typ = self._node_types[expr]
-            if isinstance(typ, typesys.FunctionInstance):
-                name = _mangle_ident(
-                    *ModulePath.from_class_path(self._class_ty.id.name),
-                    typ.function.id.name,
-                )
-            elif expr.name in self._class_ty.members:
-                return codegen.CFieldAccess(
-                    struct_value=codegen.CFieldAccess(
-                        struct_value=codegen.CVariable("self"),
-                        field_name="data",
-                        pointer=False,
-                    ),
-                    field_name=expr.name,
-                    pointer=True,
+    def visit_ReturnStmt(self, node: ast.ReturnStmt) -> None:
+        super().visit_ReturnStmt(node)
+        ret_expr = self.last_expr.take()
+        expr = None if ret_expr.is_none() else ret_expr.unwrap()
+        self.cfunction.unwrap().body.append(cnodes.CReturnStmt(expr))
+
+    def visit_IdentExpr(self, node: ast.IdentExpr) -> None:
+        ty = self.expr_types[node]
+        expr: cnodes.CExpr
+        if isinstance(ty, typesys.FunctionInstance):
+            if ty.function.static:
+                expr = cnodes.CVariable(
+                    get_class_member_name(self.class_ty, node.name)
                 )
             else:
-                name = self._var_name(expr.name)
-            return codegen.CVariable(name)
-        elif isinstance(expr, ast.IntExpr):
-            return codegen.CInteger(expr.value)
-        elif isinstance(expr, ast.CallExpr):
-            target_ty = self._node_types[expr.target]
-            assert isinstance(target_ty, typesys.FunctionInstance)
-
-            args: t.List[codegen.CExpr] = []
-
-            # if expr.target is a DotExpr and target_ty is not static, use a
-            # temporary for the left side of the dot and pass it as the first
-            # argument to the call.
-            # if expr.target is an identifier expression and target_ty is not
-            # static, assert current function is not static and pass self as
-            # first argument.
-
-            exprs: t.List[codegen.CExpr] = []
-            if (
-                isinstance(expr.target, ast.DotExpr)
-                and not target_ty.function.static
-            ):
-                # Put expr.target.left in a temporary
-                tmp_local = codegen.CVariable(
-                    self._unique_local(
-                        _ty_to_ctype(
-                            self.ctx, self._node_types[expr.target.left]
-                        )
-                    )
-                )
-                exprs.append(
-                    codegen.CAssignmentExpr(
-                        tmp_local,
-                        self._compile_expr(expr.target.left),
-                    )
-                )
-                args.append(tmp_local)
-                ctarget = codegen.CFieldAccess(
-                    struct_value=codegen.CFieldAccess(
-                        struct_value=tmp_local,
-                        field_name="vtable",
-                        pointer=False,
-                    ),
-                    field_name=expr.target.name,
-                    pointer=True,
-                )
-            elif (
-                isinstance(expr.target, ast.IdentExpr)
-                and not target_ty.function.static
-            ):
-                if self._method.static:
-                    raise JoeTypeError(
-                        expr.location,
-                        "Can't call non-static method from static method",
-                    )
-                args.append(codegen.CVariable("self"))
-                ctarget = self._compile_expr(expr.target)
-            else:
-                ctarget = self._compile_expr(expr.target)
-
-            args.extend(self._compile_expr(arg) for arg in expr.arguments)
-            exprs.append(codegen.CCallExpr(ctarget, args))
-
-            return codegen.CParens(codegen.CSeqExpr(exprs))
-        elif isinstance(expr, ast.AssignExpr):
-            ctarget = self._compile_expr(expr.target)
-            cvalue = self._compile_expr(expr.value)
-            assert isinstance(ctarget, codegen.CAssignmentTarget)
-            return codegen.CAssignmentExpr(target=ctarget, value=cvalue)
-        elif isinstance(expr, ast.PlusExpr):
-            cleft = self._compile_expr(expr.left)
-            cright = self._compile_expr(expr.right)
-            left_ty = self._node_types[expr.left]
-            right_ty = self._node_types[expr.right]
-            if isinstance(left_ty, typesys.DoubleType) ^ isinstance(
-                right_ty, typesys.DoubleType
-            ):
-                to_cast = (
-                    cleft if isinstance(left_ty, typesys.DoubleType) else cright
-                )
-                casted = codegen.CCast(
-                    to_cast, _ty_to_ctype(self.ctx, typesys.DoubleType())
-                )
-                if isinstance(left_ty, typesys.DoubleType):
-                    cleft = casted
-                else:
-                    cright = casted
-            return codegen.CBinExpr(
-                left=cleft, right=cright, op=codegen.BinOp.Add
-            )
-        elif isinstance(expr, ast.DotExpr):
-            cleft = self._compile_expr(expr.left)
-            left_ty = self._node_types[expr.left]
-            result_ty = self._node_types[expr]
-
-            assert isinstance(left_ty, typesys.ClassInstance)
-            if (
-                isinstance(result_ty, typesys.FunctionInstance)
-                and result_ty.function.static
-            ):
-                return codegen.CVariable(
-                    name=_mangle_ident(
-                        *ModulePath.from_class_path(left_ty.class_.id.name),
-                        expr.name,
-                    )
-                )
-            else:
-                mem = left_ty.get_member(expr.name)
-                if mem is not None:
-                    return codegen.CFieldAccess(
-                        struct_value=codegen.CFieldAccess(
-                            struct_value=cleft,
-                            field_name="data",
-                            pointer=False,
-                        ),
-                        field_name=expr.name,
-                        pointer=True,
-                    )
-                meth = left_ty.get_method(expr.name)
-                if meth is not None:
-                    return codegen.CFieldAccess(
-                        struct_value=codegen.CFieldAccess(
-                            struct_value=cleft,
-                            field_name="vtable",
-                            pointer=False,
-                        ),
-                        field_name=expr.name,
-                        pointer=True,
-                    )
-                raise JoeUnreachable()
-        elif isinstance(expr, ast.NewExpr):
-            new_ty = self.ctx.type_scope[expr.path]
-            obj_ty = self._node_types[expr]
-            assert isinstance(new_ty, typesys.Class)
-            assert isinstance(obj_ty, typesys.ClassInstance)
-            cnew_ty = _ty_to_ctype(self.ctx, obj_ty)
-            tmp_local = codegen.CVariable(self._unique_local(cnew_ty))
-            new_exprs: t.List[codegen.CExpr] = [
-                # Allocate the object data struct
-                codegen.CAssignmentExpr(
-                    target=codegen.CFieldAccess(
-                        struct_value=tmp_local,
-                        field_name="data",
-                        pointer=False,
-                    ),
-                    value=codegen.CCallExpr(
-                        target=codegen.CVariable("malloc"),
-                        arguments=[
-                            codegen.CCallExpr(
-                                target=codegen.CVariable("sizeof"),
-                                arguments=[
-                                    codegen.CTypeExpr(
-                                        codegen.CStructType(
-                                            _mangle_ident(
-                                                *ModulePath.from_class_path(
-                                                    new_ty.id.name
-                                                ),
-                                                "data",
-                                            ),
-                                        ),
-                                    )
-                                ],
-                            ),
-                        ],
-                    ),
-                ),
-                # Assign the vtable
-                codegen.CAssignmentExpr(
-                    target=codegen.CFieldAccess(
-                        struct_value=tmp_local,
-                        field_name="vtable",
-                        pointer=False,
-                    ),
-                    value=codegen.CRef(
-                        codegen.CVariable(
-                            _mangle_ident(
-                                *ModulePath.from_class_path(new_ty.id.name),
-                                "vtable",
-                            )
-                        )
-                    ),
-                ),
-            ]
-            unqualified_name = ModulePath.from_class_path(new_ty.id.name)[-1]
-            constructor = obj_ty.get_method(unqualified_name)
-            if constructor is not None:
-                constructor_args = [tmp_local] + [
-                    self._compile_expr(arg) for arg in expr.arguments
-                ]
-
-                # Call the constructor
-                new_exprs.append(
-                    codegen.CCallExpr(
-                        target=codegen.CFieldAccess(
-                            struct_value=codegen.CFieldAccess(
-                                struct_value=tmp_local,
-                                field_name="vtable",
-                                pointer=False,
-                            ),
-                            field_name=ModulePath.from_class_path(
-                                new_ty.id.name
-                            )[-1],
-                            pointer=True,
-                        ),
-                        arguments=constructor_args,
-                    ),
-                )
-            # Leave the object as the result of the sequence expression
-            new_exprs.append(tmp_local)
-            return codegen.CEmitOnce(
-                first_emit=codegen.CParens(codegen.CSeqExpr(new_exprs)),
-                after=tmp_local,
-            )
+                expr = get_self_vtable_member(node.name)
+                self.receiver.replace(get_self())
+        elif node.name in (
+            l.name.unmangled() for l in self.cfunction.unwrap().locals
+        ) or node.name in (p.name.value for p in self.meth_node.parameters):
+            # It's a local variable. Scopes should already be flattened, so
+            # variables are function-scoped.
+            expr = cnodes.CVariable(get_local_name(node.name))
+        elif node.name in self.class_ty.members:
+            # It's accessing a field on self.
+            expr = get_self_data_member(node.name)
         else:
-            raise NotImplementedError(expr)
+            raise JoeUnreachable()
+        self.last_expr.replace(expr)
+
+    def visit_IntExpr(self, node: ast.IntExpr) -> None:
+        self.last_expr.replace(cnodes.CInteger(node.value))
+
+    def visit_CallExpr(self, node: ast.CallExpr) -> None:
+        self.visit_Expr(node.target)
+        target = self.last_expr.take().unwrap()
+        func_ty = self.expr_types[node.target]
+        assert isinstance(func_ty, typesys.FunctionInstance)
+
+        args = []
+        if not func_ty.function.static:
+            receiver = self.receiver.take().unwrap()
+            args.append(receiver)
+
+        for arg in node.arguments:
+            self.visit_Expr(arg)
+            args.append(self.last_expr.take().unwrap())
+
+        result = self.cache_in_local(
+            cnodes.CCallExpr(target, args), self.expr_types[node]
+        )
+        self.last_expr.replace(result)
+
+    def visit_AssignExpr(self, node: ast.AssignExpr) -> None:
+        self.visit_Expr(node.target)
+        dest = self.last_expr.take().unwrap()
+        assert isinstance(dest, cnodes.CAssignmentTarget)
+        self.visit_Expr(node.value)
+        value = self.last_expr.take().unwrap()
+        self.last_expr.replace(cnodes.CAssignmentExpr(dest, value))
+
+    def visit_PlusExpr(self, node: ast.PlusExpr) -> None:
+        self.visit_Expr(node.left)
+        left = self.last_expr.take().unwrap()
+        self.visit_Expr(node.right)
+        right = self.last_expr.take().unwrap()
+        left_ty = self.expr_types[node.left]
+        right_ty = self.expr_types[node.right]
+        if isinstance(left_ty, typesys.DoubleType) ^ isinstance(
+            right_ty, typesys.DoubleType
+        ):
+            to_cast = left if isinstance(left_ty, typesys.DoubleType) else right
+            casted = cnodes.CCast(to_cast, get_ctype(typesys.DoubleType()))
+            if isinstance(left_ty, typesys.DoubleType):
+                left = casted
+            else:
+                right = casted
+        self.last_expr.replace(
+            cnodes.CBinExpr(left=left, right=right, op=cnodes.BinOp.Add)
+        )
+
+    def visit_DotExpr(self, node: ast.DotExpr) -> None:
+        self.visit_Expr(node.left)
+        left = self.last_expr.take().unwrap()
+        left_ty = self.expr_types[node.left]
+        assert isinstance(left_ty, typesys.ClassInstance)
+
+        mem = left_ty.get_member(node.name)
+        if mem is not None:
+            expr = get_data_member(left, node.name)
+        else:
+            meth = left_ty.get_method(node.name)
+            assert meth is not None
+            expr = get_vtable_member(left, node.name)
+            self.receiver.replace(left)
+
+        self.last_expr.replace(expr)
+
+    def visit_NewExpr(self, node: ast.NewExpr) -> None:
+        obj_var = self.new_variable(self.expr_types[node])
+        obj_ty = self.expr_types[node]
+        assert isinstance(obj_ty, typesys.ClassInstance)
+        class_ty = obj_ty.class_
+
+        create_data = make_assign_stmt(
+            get_member(obj_var, "data"),
+            make_malloc(cnodes.CStructType(get_class_data_name(class_ty))),
+        )
+        create_vtable = make_assign_stmt(
+            get_member(obj_var, "vtable"),
+            cnodes.CRef(cnodes.CVariable(get_class_vtable_name(class_ty))),
+        )
+
+        cfunc = self.cfunction.unwrap()
+        cfunc.body.extend([create_data, create_vtable])
+
+        unqualified_name = ModulePath.from_class_path(class_ty.id.name)[-1]
+        constructor = obj_ty.get_method(unqualified_name)
+        if constructor is not None:
+            constructor_args: t.List[cnodes.CExpr] = [obj_var]
+            for arg in node.arguments:
+                self.visit_Expr(arg)
+                constructor_args.append(self.last_expr.take().unwrap())
+
+            # Call the constructor
+            call_constructor = cnodes.CExprStmt(
+                cnodes.CCallExpr(
+                    target=get_vtable_member(obj_var, unqualified_name),
+                    arguments=constructor_args,
+                ),
+            )
+            cfunc.body.append(call_constructor)
+
+        self.last_expr.replace(obj_var)

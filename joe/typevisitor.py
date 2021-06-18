@@ -156,7 +156,7 @@ class MethodExprTypeVisitor(Visitor):
         method: typesys.Function,
         method_node: ast.Method,
     ) -> t.Dict[ast.Node, typesys.Type]:
-        vis = cls(type_scope, class_, method)
+        vis = cls(type_scope, class_, method, method_node)
         vis.visit(method_node)
         return vis.expr_types
 

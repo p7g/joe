@@ -31,42 +31,46 @@ This is the output of running the `test.py` program against the `simple.java`
 file right now:
 
 ```c
-#include <stdio.h>
 #include <stdlib.h>
-/* start module simple */
-struct __joe6simple4dataE {
+struct __joe_simple {
+    struct __joe_simple___0data* data;
+    struct __joe_simple___0vtable* vtable;
+};
+struct __joe_simple___0data {
     int _n;
 };
-struct __joe6simpleE;
-struct __joe6simple6vtableE {
-    void (*simple)(struct __joe6simpleE, int);
-    int (*test)(struct __joe6simpleE, int);
+struct __joe_simple___0vtable {
+    void (*simple)(struct __joe_simple, int);
+    int (*test)(struct __joe_simple, int);
 };
-struct __joe6simpleE {
-    struct __joe6simple4dataE* data;
-    struct __joe6simple6vtableE* vtable;
-};
-
-void __joe6simple6simpleE(struct __joe6simpleE self, int __joe6simple6simple1nE) {
-    (((self).data)->_n) = (__joe6simple6simple1nE);
+void __joe_simple___simple(struct __joe_simple self, int __joe_n);
+int __joe_simple___test(struct __joe_simple self, int __joe_a);
+void __joe_simple___main();
+void __joe_simple___println(int __joe_n);
+int main();
+struct __joe_simple___0vtable __joe_simple___0vtable = {__joe_simple___simple, __joe_simple___test};
+void __joe_simple___simple(struct __joe_simple self, int __joe_n) {
+    (((self).data)->_n) = (__joe_n);
 }
-
-int __joe6simple4testE(struct __joe6simpleE self, int __joe6simple4test1aE) {
-    return (__joe6simple4test1aE) + (((self).data)->_n);
+int __joe_simple___test(struct __joe_simple self, int __joe_a) {
+    return (__joe_a) + (((self).data)->_n);
 }
-
-struct __joe6simple6vtableE __joe6simple6vtableE = {__joe6simple6simpleE, __joe6simple4testE};
-
-void __joe6simple4mainE() {
-    struct __joe6simpleE __joe_local_0;
-    printf("%d\n", (((((__joe_local_0).data) = (malloc(sizeof(struct __joe6simple4dataE))), ((__joe_local_0).vtable) = (&(__joe6simple6vtableE)), ((__joe_local_0).vtable)->simple(__joe_local_0, 123), __joe_local_0)).vtable)->test(__joe_local_0, 234));
+void __joe_simple___main() {
+    struct __joe_simple __joe_local_0;
+    int __joe_local_1;
+    ((__joe_local_0).data) = (malloc(sizeof(struct __joe_simple___0data)));
+    ((__joe_local_0).vtable) = (&(__joe_simple___0vtable));
+    ((__joe_local_0).vtable)->simple(__joe_local_0, 123);
+    (__joe_local_1) = (((__joe_local_0).vtable)->test(__joe_local_0, 234));
+    __joe_simple___println(__joe_local_1);
 }
-
+void __joe_simple___println(int __joe_n) {
+}
 int main() {
-    __joe6simple4mainE();
+    __joe_simple___main();
     return 0;
 }
-/* end module simple */
 ```
 
-It's not pretty, but it does compile, and it sure does print `357\n` :sunglasses:
+It's not pretty, but it does compile, and it ~sure does print `357\n`~ doesn't
+print anything because I need to figure out C interop.
