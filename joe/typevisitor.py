@@ -98,6 +98,12 @@ class ClassDeclarationVisitor(Visitor):
             raise JoeSyntaxError(
                 node.location, f"Duplicate method name '{node.name.value}'"
             )
+        if node.name.value == self.class_id.name and not isinstance(
+            node.return_type, ast.VoidType
+        ):
+            raise JoeSyntaxError(
+                node.location, "Constructor must have void return type"
+            )
         assert self.class_id is not None
         self.methods[node.name.value] = typesys.Function(
             id_=typesys.FunctionID(self.class_id, node.name.value),

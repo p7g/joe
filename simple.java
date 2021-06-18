@@ -1,7 +1,7 @@
 class simple {
     int _n;
 
-    simple(int n) {
+    void simple(int n) {
         _n = n;
     }
 

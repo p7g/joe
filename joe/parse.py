@@ -118,20 +118,12 @@ class Parser:
                 static = True
             else:
                 static = False
-            if (
-                not static
-                and tok.type == TokenType.Ident
-                and tok.value == class_name
-            ):
-                name = ast.Name(value=tok.value, location=tok.location)
-                return_type: ast.Type = ast.VoidType(loc)
-                self.tokens.next()
-            else:
-                return_type = self._parse_type()
-                name_tok = self.tokens.next().expect(TokenType.Ident)
-                name = ast.Name(
-                    value=name_tok.value, location=name_tok.location
-                )
+
+            return_type = self._parse_type()
+            name_tok = self.tokens.next().expect(TokenType.Ident)
+            name = ast.Name(
+                value=name_tok.value, location=name_tok.location
+            )
 
             tok = self.tokens.next()
             if tok.type == TokenType.SemiColon:
