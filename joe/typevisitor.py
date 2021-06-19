@@ -49,13 +49,14 @@ class TypeVisitor(Visitor):
 
 
 class ClassDeclarationVisitor(Visitor):
-    _self_type_placeholder = typesys.PlaceholderType()
-
-    def __init__(self, type_scope: t.Mapping[str, TypeOrClass]):
-        self.methods: t.Dict[str, typesys.Function] = {}
-        self.fields: t.Dict[str, typesys.Type] = {}
-        self.class_id: t.Optional[typesys.ClassID] = None
-        self.superclass: t.Optional[typesys.Type] = None
+    def __init__(self, type_scope: t.Mapping[str, TypeOrClass], name: str):
+        self.ty = typesys.Class(
+            id_=typesys.ClassID(name),
+            type_parameters=[],
+            members={},
+            methods={},
+            superclass=None,
+        )
         self._type_scope = type_scope
 
     @classmethod
@@ -64,66 +65,41 @@ class ClassDeclarationVisitor(Visitor):
         type_scope: t.Mapping[str, TypeOrClass],
         class_decl: ast.ClassDeclaration,
     ) -> typesys.Class:
-        vis = cls(type_scope)
+        vis = cls(type_scope, class_decl.name.value)
         vis.visit(class_decl)
-        assert vis.class_id is not None
-        assert vis.superclass is None or isinstance(
-            vis.superclass, typesys.ClassInstance
-        )
-        cls_ty = typesys.Class(
-            id_=vis.class_id,
-            type_parameters=[],
-            members=vis.fields,
-            methods=vis.methods,
-            superclass=vis.superclass,
-        )
-        for name, member in cls_ty.members.items():
-            if member is cls._self_type_placeholder:
-                cls_ty.members[name] = typesys.ClassInstance(cls_ty, [])
-        for method in cls_ty.methods.values():
-            if method.return_type is cls._self_type_placeholder:
-                method.return_type = typesys.ClassInstance(cls_ty, [])
-            for i, param in enumerate(method.formal_parameters):
-                if param is cls._self_type_placeholder:
-                    method.formal_parameters[i] = typesys.ClassInstance(
-                        cls_ty, []
-                    )
-        return cls_ty
+        return vis.ty
 
     def analyze_type(self, node: ast.Type) -> typesys.Type:
-        scope = self._type_scope.copy()
-        assert self.class_id is not None
-        scope[self.class_id.name] = self._self_type_placeholder
-        return TypeVisitor.analyze(scope, node)
+        return TypeVisitor.analyze(self._type_scope, node)
 
     def visit_ClassDeclaration(self, node: ast.ClassDeclaration):
-        self.class_id = typesys.ClassID(node.name.value)
         # TODO: inheritance
         # if node.extends:
         #     self.superclass = self.analyze_type(node.extends)
+        # Add current class to scope after resolving superclass (avoid cycle)
+        self._type_scope = t.ChainMap[str, TypeOrClass]({self.ty.id.name: self.ty}, self._type_scope)
         super().visit_ClassDeclaration(node)
 
     def visit_Field(self, node: ast.Field):
-        if node.name.value in self.fields:
+        if node.name.value in self.ty.members:
             raise JoeSyntaxError(
                 node.location, f"Duplicate field name '{node.name.value}'"
             )
-        self.fields[node.name.value] = self.analyze_type(node.type)
+        self.ty.members[node.name.value] = self.analyze_type(node.type)
 
     def visit_Method(self, node: ast.Method):
-        if node.name.value in self.methods:
+        if node.name.value in self.ty.methods:
             raise JoeSyntaxError(
                 node.location, f"Duplicate method name '{node.name.value}'"
             )
-        if node.name.value == self.class_id.name and not isinstance(
+        if node.name.value == self.ty.id.name and not isinstance(
             node.return_type, ast.VoidType
         ):
             raise JoeSyntaxError(
                 node.location, "Constructor must have void return type"
             )
-        assert self.class_id is not None
-        self.methods[node.name.value] = typesys.Function(
-            id_=typesys.FunctionID(self.class_id, node.name.value),
+        self.ty.methods[node.name.value] = typesys.Function(
+            id_=typesys.FunctionID(self.ty.id, node.name.value),
             type_parameters=[],
             formal_parameters=[
                 self.analyze_type(p.type) for p in node.parameters

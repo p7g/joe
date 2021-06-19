@@ -346,20 +346,6 @@ class Type(abc.ABC):
         ...
 
 
-class PlaceholderType(Type):
-    def is_subtype_of(self, other: "Type") -> bool:
-        return False
-
-    def check(self, scope: Scope) -> None:
-        raise TypeError("Placeholder type remains during type check")
-
-    def concretize(self, scope: Scope) -> "Type":
-        return self
-
-    def mangled_name(self) -> str:
-        raise JoeUnreachable()
-
-
 class VoidType(Type):
     def is_subtype_of(self, other: Type) -> bool:
         return False
