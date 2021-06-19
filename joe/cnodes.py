@@ -5,48 +5,12 @@ from dataclasses import dataclass, field
 from joe.emit import Emitter
 
 
-class CName(abc.ABC):
-    @abc.abstractmethod
-    def __str__(self) -> str:
-        ...
-
-    @abc.abstractmethod
-    def unmangled(self) -> str:
-        ...
-
-
-@dataclass
-class CUnmangledName(CName):
-    name: str = ""
-
-    def __str__(self) -> str:
-        return self.name
-
-    def unmangled(self) -> str:
-        return self.name
-
-
-@dataclass
-class CMangledName(CName):
-    parts: t.List[str]
-
-    def __str__(self) -> str:
-        # "Inspired by" mypyc
-        # https://github.com/mypy/mypyc/blob/master/mypyc/namegen.py
-        return "__joe_" + "___".join(
-            [part.replace("___", "___4_") for part in self.parts]
-        )
-
-    def unmangled(self) -> str:
-        return ".".join(self.parts)
-
-
 class CType(abc.ABC):
     @abc.abstractmethod
     def render(self) -> str:
         ...
 
-    def render_named(self, name: CName) -> str:
+    def render_named(self, name: str) -> str:
         return f"{self.render()} {name}"
 
     def as_pointer(self) -> "CPointerType":
@@ -63,7 +27,7 @@ class CPointerType(CType):
 
 @dataclass
 class CStructType(CType):
-    name: CName
+    name: str
 
     def render(self) -> str:
         return f"struct {self.name}"
@@ -74,20 +38,20 @@ class CFuncType(CType):
     return_type: CType
     parameter_types: t.List[CType]
 
-    def _render(self, name: CName = None) -> str:
+    def _render(self, name: str = "") -> str:
         params = ", ".join([ty.render() for ty in self.parameter_types])
-        return f"{self.return_type.render()} (*{name or CUnmangledName()})({params})"
+        return f"{self.return_type.render()} (*{name})({params})"
 
     def render(self) -> str:
         return self._render()
 
-    def render_named(self, name: CName) -> str:
+    def render_named(self, name: str) -> str:
         return self._render(name=name)
 
 
 @dataclass
 class CNamedType(CType):
-    name: CName
+    name: str
 
     def render(self) -> str:
         return str(self.name)
@@ -95,7 +59,7 @@ class CNamedType(CType):
 
 @dataclass
 class CStructField:
-    name: CName
+    name: str
     type: CType
 
     def render(self) -> str:
@@ -104,7 +68,7 @@ class CStructField:
 
 @dataclass  # type: ignore
 class CDecl(abc.ABC):
-    name: CName
+    name: str
 
     @abc.abstractmethod
     def emit_forward_decl(self, gen: Emitter) -> None:
@@ -136,7 +100,7 @@ class CStruct(CDecl):
 
 @dataclass
 class CParam:
-    name: CName
+    name: str
     type: CType
 
 
@@ -217,7 +181,7 @@ class CParens(CExpr):
 
 @dataclass
 class CVariable(CAssignmentTarget):
-    name: CName
+    name: str
 
     def __str__(self):
         return str(self.name)
@@ -252,7 +216,7 @@ class CArrayIndex(CAssignmentTarget):
 @dataclass
 class CFieldAccess(CAssignmentTarget):
     struct_value: CExpr
-    field_name: CName
+    field_name: str
     pointer: bool = False
 
     def __str__(self):
@@ -351,7 +315,7 @@ class CExprStmt(CStmt):
 
 @dataclass
 class CVarDecl(CStmt, CDecl):
-    name: CName
+    name: str
     type: CType
     value: t.Optional[CExpr] = None
 

@@ -18,8 +18,12 @@ class TypeParam:
 Scope = t.Mapping["TypeVar", "Type"]
 
 
-class ID:
+class ID(abc.ABC):
     name: str
+
+    @abc.abstractmethod
+    def mangle(self) -> str:
+        ...
 
 
 class ClassID(ID):
@@ -46,6 +50,87 @@ class ClassID(ID):
         else:
             args = ""
         return f"{self.name}{args}"
+
+    def mangle(self) -> str:
+        name_parts = self.name.split(".")
+        buf = "N"
+        for part in name_parts:
+            buf += f"{len(part)}{part}"
+        if self.concrete_arguments:
+            buf += "I"
+            for arg in self.concrete_arguments:
+                buf += arg.mangled_name()
+            buf += "E"
+        return buf
+
+
+def test():
+    T = TypeVar()
+    class_id = ClassID("this.is.my.test.Class")
+    class_ = ClassInstance(
+        Class(
+            id_=class_id,
+            type_parameters=[TypeParam(n, TypeVar()) for n in "ABC"],
+            members={},
+            methods={
+                "myfavfunction": Function(
+                    id_=FunctionID(
+                        class_id, "myfavfunction", concrete_arguments=[]
+                    ),
+                    type_parameters=[TypeParam("T", T)],
+                    formal_parameters=[T, DoubleType()],
+                    return_type=VoidType(),
+                    static=False,
+                ),
+            },
+        ),
+        [
+            IntType(),
+            DoubleType(),
+            ClassInstance(
+                Class(
+                    id_=ClassID("some.other.class.Here"),
+                    type_parameters=[],
+                    members={},
+                    methods={},
+                ),
+                [],
+            ),
+        ],
+    ).concretize({})
+    print(class_.mangled_name())
+    # assert (
+    #     class_.mangled_name()
+    #     == "N4this2is2my4test5ClassIidN4some5other5class4HereEE"
+    # )
+    f = FunctionInstance(
+        class_.get_method("myfavfunction"),
+        [IntType()],
+    ).concretize({})
+    print(f.mangled_name())
+
+    print(
+        FunctionInstance(
+            Function(
+                id_=FunctionID(ClassID("Greeter"), "greet"),
+                type_parameters=[],
+                formal_parameters=[
+                    ClassInstance(
+                        Class(
+                            id_=ClassID("unsafe.Pointer"),
+                            type_parameters=[TypeParam("T", TypeVar())],
+                            members={},
+                            methods={},
+                        ),
+                        [IntType()],
+                    ).concretize({})
+                ],
+                return_type=VoidType(),
+                static=False,
+            ),
+            [],
+        ).mangled_name()
+    )
 
 
 class FunctionID(ID):
@@ -77,6 +162,15 @@ class FunctionID(ID):
             args = ""
         return f"{self.class_id!r}.{self.name}{args}"
 
+    def mangle(self) -> str:
+        self_mangled = f"{len(self.name)}{self.name}"
+        if self.concrete_arguments:
+            self_mangled += "I"
+            for arg in self.concrete_arguments:
+                self_mangled += arg.mangled_name()
+        self_mangled += "E"
+        return self.class_id.mangle() + self_mangled
+
 
 _TyCon = t.TypeVar("_TyCon", bound="TypeConstructor")
 
@@ -91,6 +185,9 @@ class TypeConstructor(abc.ABC):
 
     def __hash__(self) -> int:
         return hash(self.id)
+
+    def mangled_name(self) -> str:
+        return self.id.mangle() + "E"
 
 
 class Class(TypeConstructor):
@@ -222,6 +319,14 @@ class Function(TypeConstructor):
         ret_ty = repr(self.return_type)
         return f"<Function {self.id}{type_params}({params}): {ret_ty}>"
 
+    def mangled_name(self) -> str:
+        mangled = super().mangled_name()
+
+        for param in self.formal_parameters:
+            mangled += param.mangled_name()
+
+        return mangled
+
 
 class Type(abc.ABC):
     @abc.abstractmethod
@@ -236,6 +341,10 @@ class Type(abc.ABC):
     def concretize(self, scope: Scope) -> "Type":
         ...
 
+    @abc.abstractmethod
+    def mangled_name(self) -> str:
+        ...
+
 
 class PlaceholderType(Type):
     def is_subtype_of(self, other: "Type") -> bool:
@@ -246,6 +355,9 @@ class PlaceholderType(Type):
 
     def concretize(self, scope: Scope) -> "Type":
         return self
+
+    def mangled_name(self) -> str:
+        raise JoeUnreachable()
 
 
 class VoidType(Type):
@@ -269,6 +381,9 @@ class VoidType(Type):
     def __repr__(self) -> str:
         return "void"
 
+    def mangled_name(self) -> str:
+        return "v"
+
 
 class TypeVar(Type):
     def is_subtype_of(self, other: Type) -> bool:
@@ -281,10 +396,8 @@ class TypeVar(Type):
     def concretize(self, scope: Scope) -> Type:
         return scope.get(self, self)
 
-    def __eq__(self, other):
-        if isinstance(other, TypeVar):  # type: ignore
-            return self is other
-        return NotImplemented
+    def mangled_name(self) -> str:
+        raise JoeUnreachable()
 
 
 class IntType(Type):
@@ -308,6 +421,9 @@ class IntType(Type):
     def __repr__(self) -> str:
         return "int"
 
+    def mangled_name(self) -> str:
+        return "i"
+
 
 class DoubleType(Type):
     def is_subtype_of(self, other: Type) -> bool:
@@ -329,6 +445,9 @@ class DoubleType(Type):
 
     def __repr__(self) -> str:
         return "double"
+
+    def mangled_name(self) -> str:
+        return "d"
 
 
 class Instance(Type, abc.ABC):
@@ -380,6 +499,9 @@ class Instance(Type, abc.ABC):
         else:
             args = ""
         return f"<{self.__class__.__name__} of {self.tycon}{args}>"
+
+    def mangled_name(self) -> str:
+        return self.tycon.mangled_name()
 
 
 class ClassInstance(Instance):

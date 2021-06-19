@@ -8,38 +8,39 @@ from joe.visitor import Visitor
 from patina import Option, None_
 
 
-def get_class_name(class_: typesys.Class) -> cnodes.CMangledName:
-    # TODO: encode generic arguments in name
-    return cnodes.CMangledName(ModulePath.from_class_path(class_.id.name))
+def prefix_ident(name: str) -> str:
+    return f"__joe_{name}"
 
 
-def get_class_member_name(
-    class_: typesys.Class, member: str
-) -> cnodes.CMangledName:
+def get_class_name(class_: typesys.Class) -> str:
+    return prefix_ident(class_.mangled_name())
+
+
+def get_class_member_name(class_: typesys.Class, member: str) -> str:
+    name = prefix_ident(class_.id.mangle())
+    # FIXME: name mangling logic is leaking
+    return f"{name}{len(member)}{member}E"
+
+
+def get_class_method_impl_name(function: typesys.FunctionInstance) -> str:
+    return prefix_ident(function.mangled_name())
+
+
+def get_class_data_name(class_: typesys.Class) -> str:
     name = get_class_name(class_)
-    name.parts.append(member)
-    return name
+    return f"{name}_data"
 
 
-def get_class_data_name(class_: typesys.Class) -> cnodes.CMangledName:
+def get_class_vtable_name(class_: typesys.Class) -> str:
     name = get_class_name(class_)
-    # Prefix with number to avoid conflicts with identifiers
-    name.parts.append("0data")
-    return name
-
-
-def get_class_vtable_name(class_: typesys.Class) -> cnodes.CMangledName:
-    name = get_class_name(class_)
-    # Prefix with number to avoid conflicts with identifiers
-    name.parts.append("0vtable")
-    return name
+    return f"{name}_vtable"
 
 
 def get_ctype(typ: typesys.Type) -> cnodes.CType:
     if isinstance(typ, typesys.IntType):
-        return cnodes.CNamedType(cnodes.CUnmangledName("int"))
+        return cnodes.CNamedType("int")
     elif isinstance(typ, typesys.VoidType):
-        return cnodes.CNamedType(cnodes.CUnmangledName("void"))
+        return cnodes.CNamedType("void")
     elif isinstance(typ, typesys.ClassInstance):
         return cnodes.CStructType(get_class_name(typ.class_))
     elif isinstance(typ, typesys.FunctionInstance):
@@ -54,7 +55,7 @@ def get_ctype(typ: typesys.Type) -> cnodes.CType:
 
 
 def get_self() -> cnodes.CExpr:
-    return cnodes.CVariable(cnodes.CUnmangledName("self"))
+    return cnodes.CVariable("self")
 
 
 def get_member(
@@ -62,7 +63,7 @@ def get_member(
 ) -> cnodes.CAssignmentTarget:
     return cnodes.CFieldAccess(
         struct_value=struct,
-        field_name=cnodes.CUnmangledName(name),
+        field_name=name,
         pointer=pointer,
     )
 
@@ -123,7 +124,7 @@ class CompileVisitor(Visitor):
         for name, field_ty in class_ty.members.items():
             data_ctype.fields.append(
                 cnodes.CStructField(
-                    name=cnodes.CUnmangledName(name),
+                    name=name,
                     type=get_ctype(field_ty),
                 )
             )
@@ -137,20 +138,18 @@ class CompileVisitor(Visitor):
                     0, get_ctype(typesys.ClassInstance(class_ty, []))
                 )
                 vtable_ctype.fields.append(
-                    cnodes.CStructField(
-                        name=cnodes.CUnmangledName(name), type=meth_cty
-                    )
+                    cnodes.CStructField(name=name, type=meth_cty)
                 )
 
         class_ctype = cnodes.CStruct(
             name=get_class_name(class_ty),
             fields=[
                 cnodes.CStructField(
-                    name=cnodes.CUnmangledName("data"),
+                    name="data",
                     type=data_ctype.type.as_pointer(),
                 ),
                 cnodes.CStructField(
-                    name=cnodes.CUnmangledName("vtable"),
+                    name="vtable",
                     type=vtable_ctype.type.as_pointer(),
                 ),
             ],
@@ -209,13 +208,11 @@ class CompileVisitor(Visitor):
             or not meth_ty.static
             or meth_ty.formal_parameters
         ):
-            raise Exception(
-                f"Invalid signature for main method: {meth_name}"
-            )
+            raise Exception(f"Invalid signature for main method: {meth_name}")
         main_name = get_class_member_name(cls_ty, meth_name)
         main_func = cnodes.CFunc(
-            name=cnodes.CUnmangledName("main"),
-            return_type=cnodes.CNamedType(cnodes.CUnmangledName("int")),
+            name="main",
+            return_type=cnodes.CNamedType("int"),
             parameters=[],
             locals=[],
             body=[
@@ -257,7 +254,7 @@ class MethodCompiler(Visitor):
 
     def new_variable(self, type_: typesys.Type) -> cnodes.CAssignmentTarget:
         locs = self.cfunction.unwrap().locals
-        new_loc_name = cnodes.CUnmangledName(f"__joe_local_{len(locs)}")
+        new_loc_name = get_local_name(str(len(locs)))
         locs.append(cnodes.CVarDecl(name=new_loc_name, type=get_ctype(type_)))
         return cnodes.CVariable(new_loc_name)
 
@@ -294,7 +291,7 @@ class MethodCompiler(Visitor):
             func.parameters.insert(
                 0,
                 cnodes.CParam(
-                    name=cnodes.CUnmangledName("self"),
+                    name="self",
                     type=get_ctype(typesys.ClassInstance(self.class_ty, [])),
                 ),
             )
@@ -328,7 +325,7 @@ class MethodCompiler(Visitor):
                 expr = get_self_vtable_member(node.name)
                 self.receiver.replace(get_self())
         elif node.name in (
-            l.name.unmangled() for l in self.cfunction.unwrap().locals
+            l.name for l in self.cfunction.unwrap().locals
         ) or node.name in (p.name.value for p in self.meth_node.parameters):
             # It's a local variable. Scopes should already be flattened, so
             # variables are function-scoped.
