@@ -24,18 +24,21 @@ class ID:
 
 class ClassID(ID):
     def __init__(
-        self, name: str, concrete_arguments: t.List["Type"] = None
+        self, name: str, concrete_arguments: t.Iterable["Type"] = None
     ) -> None:
         self.name = name
-        self.concrete_arguments = concrete_arguments or []
+        self.concrete_arguments = tuple(concrete_arguments or [])
+
+    def _key(self) -> t.Hashable:
+        return (self.name, self.concrete_arguments)
 
     def __eq__(self, other: t.Any) -> bool:
         if isinstance(other, ClassID):  # type: ignore
-            return (
-                self.name == other.name
-                and self.concrete_arguments == other.concrete_arguments
-            )
+            return self._key() == other._key()
         return NotImplemented
+
+    def __hash__(self) -> int:
+        return hash(self._key())
 
     def __repr__(self) -> str:
         if self.concrete_arguments:
@@ -50,20 +53,22 @@ class FunctionID(ID):
         self,
         class_id: ClassID,
         name: str,
-        concrete_arguments: t.List["Type"] = None,
+        concrete_arguments: t.Iterable["Type"] = None,
     ) -> None:
         self.class_id = class_id
         self.name = name
-        self.concrete_arguments = concrete_arguments or []
+        self.concrete_arguments = tuple(concrete_arguments or [])
+
+    def _key(self) -> t.Hashable:
+        return (self.class_id, self.name, self.concrete_arguments)
 
     def __eq__(self, other: t.Any) -> bool:
         if isinstance(other, FunctionID):  # type: ignore
-            return (
-                self.class_id == other.class_id
-                and self.name == other.name
-                and self.concrete_arguments == other.concrete_arguments
-            )
+            return self._key() == other._key()
         return NotImplemented
+
+    def __hash__(self) -> int:
+        return hash(self._key())
 
     def __repr__(self) -> str:
         if self.concrete_arguments:
@@ -83,6 +88,9 @@ class TypeConstructor(abc.ABC):
     @abc.abstractmethod
     def concretize(self: _TyCon, scope: Scope) -> _TyCon:
         ...
+
+    def __hash__(self) -> int:
+        return hash(self.id)
 
 
 class Class(TypeConstructor):
@@ -255,6 +263,9 @@ class VoidType(Type):
             return True
         return NotImplemented
 
+    def __hash__(self) -> int:
+        return hash("void")
+
     def __repr__(self) -> str:
         return "void"
 
@@ -291,6 +302,9 @@ class IntType(Type):
             return True
         return NotImplemented
 
+    def __hash__(self) -> int:
+        return hash("int")
+
     def __repr__(self) -> str:
         return "int"
 
@@ -309,6 +323,9 @@ class DoubleType(Type):
         if isinstance(other, DoubleType):  # type: ignore
             return True
         return NotImplemented
+
+    def __hash__(self) -> int:
+        return hash("double")
 
     def __repr__(self) -> str:
         return "double"
@@ -353,6 +370,9 @@ class Instance(Type, abc.ABC):
                 return self.tycon == other.tycon
             return self.concretize({}) == other.concretize({})
         return NotImplemented
+
+    def __hash__(self) -> int:
+        return hash((self.tycon.id, self.arguments))
 
     def __repr__(self) -> str:
         if self.arguments:
