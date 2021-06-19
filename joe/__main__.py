@@ -1,5 +1,6 @@
 def main() -> None:
     import argparse
+    import typing as t
     from joe.compile import CompileVisitor
     from joe.emit import Emitter
     from joe.parse import Parser
@@ -10,11 +11,13 @@ def main() -> None:
     argparser.add_argument("--main", "-m", dest="main_name")
 
     args = argparser.parse_args()
+    filename: str = args.filename
+    main_name: t.Optional[str] = args.main_name
 
-    with open(args.filename, "r") as f:
+    with open(filename, "r") as f:
         src = f.read()
 
-    p = Parser(args.filename, src)
+    p = Parser(filename, src)
     mods = p.parse_file()
 
     ctx = GlobalContext()
@@ -22,8 +25,8 @@ def main() -> None:
 
     vis = CompileVisitor(ctx)
     vis.visit(mods[0].class_decl)
-    if args.main_name:
-        vis.compile_main_function(args.main_name)
+    if main_name:
+        vis.compile_main_function(main_name)
 
     e = Emitter()
     vis.code_unit.emit(e)
