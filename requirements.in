@@ -1,5 +1,5 @@
 pip-tools
 black
-mypy
+mypy>=0.902
 
 patina
