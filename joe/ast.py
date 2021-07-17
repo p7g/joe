@@ -92,7 +92,7 @@ class AssignExpr(Expr):
 
 @dataclass(eq=False)
 class NewExpr(Expr):
-    path: str
+    type: Type
     arguments: t.List[Expr]
 
 
@@ -116,6 +116,12 @@ class IntExpr(Expr):
 class CallExpr(Expr):
     target: Expr
     arguments: t.List[Expr]
+
+
+@dataclass(eq=False)
+class IndexExpr(AssignmentTarget):
+    target: Expr
+    index: Expr
 
 
 @dataclass(eq=False)

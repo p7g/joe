@@ -29,7 +29,7 @@ def main() -> None:
         vis.compile_main_function(main_name)
 
     e = Emitter()
-    vis.code_unit.emit(e)
+    vis.ctx.code_unit.emit(e)
 
     print(e.get())
 

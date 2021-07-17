@@ -96,6 +96,8 @@ class Visitor:
             self.visit_IdentExpr(node)
         elif isinstance(node, ast.DotExpr):
             self.visit_DotExpr(node)
+        elif isinstance(node, ast.IndexExpr):
+            self.visit_IndexExpr(node)
         else:
             raise NotImplementedError(node)
 
@@ -124,6 +126,10 @@ class Visitor:
     def visit_PlusExpr(self, node: ast.PlusExpr):
         self.visit_Expr(node.left)
         self.visit_Expr(node.right)
+
+    def visit_IndexExpr(self, node: ast.IndexExpr):
+        self.visit_Expr(node.target)
+        self.visit_Expr(node.index)
 
     def visit_Stmt(self, node: ast.Stmt):
         if isinstance(node, ast.ReturnStmt):

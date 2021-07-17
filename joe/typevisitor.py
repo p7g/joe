@@ -39,7 +39,11 @@ class TypeVisitor(Visitor):
     def visit_VoidType(self, node: ast.VoidType):
         self.result = typesys.VoidType()
 
-    # TODO: array type (i.e. self.result = typesys.ArrayType(self.result))
+    def visit_ArrayType(self, node: ast.ArrayType):
+        element_ty = self.analyze(self._type_scope, node.element_type)
+        self.result = typesys.ClassInstance(
+            typesys.get_array_class(), [element_ty]
+        ).concretize({})
 
 
 # Class visitor:
@@ -335,6 +339,17 @@ class MethodExprTypeVisitor(Visitor):
             self.set_type(node, typesys.DoubleType())
         else:
             self.set_type(node, typesys.IntType())
+
+    def visit_IndexExpr(self, node: ast.IndexExpr):
+        super().visit_IndexExpr(node)
+        target_ty = self.get_type(node.target)
+        index_ty = self.get_type(node.index)
+        # make sure target_ty is an array
+        if not isinstance(target_ty, typesys.ClassInstance) or not target_ty.class_.is_array:
+            raise JoeTypeError(node.target.location, "Can only index arrays")
+        if not isinstance(index_ty, typesys.IntType):
+            raise JoeTypeError(node.index.location, "Can only index arrays by integers")
+        self.set_type(node, target_ty.class_.id.concrete_arguments[0])
 
     def visit_ReturnStmt(self, node: ast.ReturnStmt):
         super().visit_ReturnStmt(node)

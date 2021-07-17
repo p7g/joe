@@ -1,5 +1,7 @@
 import abc
+import functools
 import typing as t
+from joe.exc import JoeUnreachable
 
 
 class TypeError(Exception):
@@ -200,12 +202,16 @@ class Class(TypeConstructor):
         members: t.Dict[str, "Type"],
         methods: t.Dict[str, "Function"],
         superclass: t.Optional["ClassInstance"] = None,
+        is_array: bool = False,
     ) -> None:
         self.id = id_
         self.type_parameters = type_parameters
         self.members = members
         self.methods = methods
         self.superclass = superclass
+        # Allows for arr[i] in type check and gives hint to compiler about
+        # different memory layout (i.e. {T *data, int length})
+        self.is_array = is_array
 
     def get_member(self, name: str) -> t.Optional["Type"]:
         if name in self.members:
@@ -251,6 +257,7 @@ class Class(TypeConstructor):
             members=concrete_members,
             methods=concrete_methods,
             superclass=concrete_superclass,
+            is_array=self.is_array,
         )
 
     def __eq__(self, other):
@@ -264,6 +271,16 @@ class Class(TypeConstructor):
         else:
             params = ""
         return f"<Class {self.id}{params}>"
+
+
+def get_array_class() -> Class:
+    return Class(
+        id_=ClassID("joe.0virtual.Array"),
+        type_parameters=[TypeParam("T", TypeVar())],
+        members={"length": IntType()},
+        methods={},
+        is_array=True,
+    )
 
 
 class Function(TypeConstructor):
@@ -477,7 +494,7 @@ class Instance(Type, abc.ABC):
         return NotImplemented
 
     def __hash__(self) -> int:
-        return hash((self.tycon.id, self.arguments))
+        return hash((self.tycon.id, tuple(self.arguments)))
 
     def __repr__(self) -> str:
         if self.arguments:

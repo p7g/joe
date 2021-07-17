@@ -121,9 +121,7 @@ class Parser:
 
             return_type = self._parse_type()
             name_tok = self.tokens.next().expect(TokenType.Ident)
-            name = ast.Name(
-                value=name_tok.value, location=name_tok.location
-            )
+            name = ast.Name(value=name_tok.value, location=name_tok.location)
 
             tok = self.tokens.next()
             if tok.type == TokenType.SemiColon:
@@ -205,6 +203,7 @@ class Parser:
                     value=self._parse_expr(),
                 )
             elif tok.type == TokenType.LParen:
+                # Call
                 self.tokens.next()
                 args = []
                 while self.tokens.peek().type != TokenType.RParen:
@@ -225,6 +224,11 @@ class Parser:
                     left=left,
                     name=self.tokens.next().expect(TokenType.Ident).value,
                 )
+            elif tok.type == TokenType.LBracket:
+                self.tokens.next()
+                index = self._parse_expr()
+                self.tokens.next().expect(TokenType.RBracket)
+                left = ast.IndexExpr(left.location, left, index)
             else:
                 break
         return left

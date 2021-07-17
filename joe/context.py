@@ -16,7 +16,6 @@ ClassOrType = t.Union[typesys.Class, typesys.Type]
 class GlobalContext:
     def __init__(self):
         self.type_scope: t.Dict[str, ClassOrType] = {**intrinsic_types}
-        # self.array_types: t.Set[ty.ArrayType] = set()
 
     def populate_from_modules(self, modules: t.List[ast.Module]):
         for module in modules:
