@@ -241,10 +241,7 @@ class Parser:
             return ast.IdentExpr(location=tok.location, name=tok.value)
         elif tok.type == TokenType.New:
             new_tok = tok
-            path = self.tokens.next().expect(TokenType.Ident).value
-            while self.tokens.peek().type != TokenType.LParen:
-                self.tokens.next().expect(TokenType.Dot)
-                path += f".{self.tokens.next().expect(TokenType.Ident).value}"
+            ty = self._parse_type()
             self.tokens.next().expect(TokenType.LParen)
             args = []
             while self.tokens.peek().type != TokenType.RParen:
@@ -253,7 +250,7 @@ class Parser:
                     self.tokens.next().expect(TokenType.Comma)
             self.tokens.next().expect(TokenType.RParen)
             return ast.NewExpr(
-                location=new_tok.location, path=path, arguments=args
+                location=new_tok.location, type=ty, arguments=args
             )
         else:
             raise NotImplementedError(tok)

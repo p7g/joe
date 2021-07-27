@@ -1,706 +1,244 @@
-import abc
-import functools
-import typing as t
-from joe.exc import JoeUnreachable
+# Types and type constructors
+
+from __future__ import annotations
 
 
-class TypeError(Exception):
-    pass
-
-
-class TypeParam:
-    def __init__(self, name: str, var: "TypeVar") -> None:
-        self.name = name
-        self.var = var
-
-    def __repr__(self) -> str:
-        return f"<TypeParam name={self.name} var={self.var}>"
-
-
-Scope = t.Mapping["TypeVar", "Type"]
-
-
-class ID(abc.ABC):
-    name: str
-
-    @abc.abstractmethod
-    def mangle(self) -> str:
-        ...
-
-
-class ClassID(ID):
-    def __init__(
-        self, name: str, concrete_arguments: t.Iterable["Type"] = None
-    ) -> None:
-        self.name = name
-        self.concrete_arguments = tuple(concrete_arguments or [])
-
-    def _key(self) -> t.Hashable:
-        return (self.name, self.concrete_arguments)
-
-    def __eq__(self, other: t.Any) -> bool:
-        if isinstance(other, ClassID):  # type: ignore
-            return self._key() == other._key()
-        return NotImplemented
-
-    def __hash__(self) -> int:
-        return hash(self._key())
-
-    def __repr__(self) -> str:
-        if self.concrete_arguments:
-            args = "[%s]" % ", ".join(map(repr, self.concrete_arguments))
-        else:
-            args = ""
-        return f"{self.name}{args}"
-
-    def mangle(self) -> str:
-        name_parts = self.name.split(".")
-        buf = "N"
-        for part in name_parts:
-            buf += f"{len(part)}{part}"
-        if self.concrete_arguments:
-            buf += "I"
-            for arg in self.concrete_arguments:
-                buf += arg.mangled_name()
-            buf += "E"
-        return buf
-
-
-def test():
-    T = TypeVar()
-    class_id = ClassID("this.is.my.test.Class")
-    class_ = ClassInstance(
-        Class(
-            id_=class_id,
-            type_parameters=[TypeParam(n, TypeVar()) for n in "ABC"],
-            members={},
-            methods={
-                "myfavfunction": Function(
-                    id_=FunctionID(
-                        class_id, "myfavfunction", concrete_arguments=[]
-                    ),
-                    type_parameters=[TypeParam("T", T)],
-                    formal_parameters=[T, DoubleType()],
-                    return_type=VoidType(),
-                    static=False,
-                ),
-            },
-        ),
-        [
-            IntType(),
-            DoubleType(),
-            ClassInstance(
-                Class(
-                    id_=ClassID("some.other.class.Here"),
-                    type_parameters=[],
-                    members={},
-                    methods={},
-                ),
-                [],
-            ),
-        ],
-    ).concretize({})
-    print(class_.mangled_name())
-    # assert (
-    #     class_.mangled_name()
-    #     == "N4this2is2my4test5ClassIidN4some5other5class4HereEE"
-    # )
-    f = FunctionInstance(
-        class_.get_method("myfavfunction"),
-        [IntType()],
-    ).concretize({})
-    print(f.mangled_name())
-
-    print(
-        FunctionInstance(
-            Function(
-                id_=FunctionID(ClassID("Greeter"), "greet"),
-                type_parameters=[],
-                formal_parameters=[
-                    ClassInstance(
-                        Class(
-                            id_=ClassID("unsafe.Pointer"),
-                            type_parameters=[TypeParam("T", TypeVar())],
-                            members={},
-                            methods={},
-                        ),
-                        [IntType()],
-                    ).concretize({})
-                ],
-                return_type=VoidType(),
-                static=False,
-            ),
-            [],
-        ).mangled_name()
-    )
-
-
-class FunctionID(ID):
+class TypeConstructor:
     def __init__(
         self,
-        class_id: ClassID,
-        name: str,
-        concrete_arguments: t.Iterable["Type"] = None,
+        parameters: list[TypeParameter],
+        super_: Instance | TopType,
+        is_function: bool = False,
     ) -> None:
-        self.class_id = class_id
-        self.name = name
-        self.concrete_arguments = tuple(concrete_arguments or [])
+        self.parameters = parameters
+        self.super = super_
+        self.is_function = is_function
 
-    def _key(self) -> t.Hashable:
-        return (self.class_id, self.name, self.concrete_arguments)
-
-    def __eq__(self, other: t.Any) -> bool:
-        if isinstance(other, FunctionID):  # type: ignore
-            return self._key() == other._key()
-        return NotImplemented
+    def __eq__(self, other) -> bool:
+        if not isinstance(other, TypeConstructor):  # type: ignore
+            return NotImplemented
+        return self is other
 
     def __hash__(self) -> int:
-        return hash(self._key())
+        return id(self)
 
-    def __repr__(self) -> str:
-        if self.concrete_arguments:
-            args = "[%s]" % ", ".join(map(repr, self.concrete_arguments))
-        else:
-            args = ""
-        return f"{self.class_id!r}.{self.name}{args}"
-
-    def mangle(self) -> str:
-        self_mangled = f"{len(self.name)}{self.name}"
-        if self.concrete_arguments:
-            self_mangled += "I"
-            for arg in self.concrete_arguments:
-                self_mangled += arg.mangled_name()
-        self_mangled += "E"
-        return self.class_id.mangle() + self_mangled
+    def parents(self) -> list[Type]:
+        result: list[Type] = []
+        current = self.super
+        while True:
+            if isinstance(current, TopType):
+                break
+            result.append(current)
+            current = current.type_constructor.super
+        return result
 
 
-_TyCon = t.TypeVar("_TyCon", bound="TypeConstructor")
+class TypeParameter:
+    def __init__(self, variance: Variance, bound: Type) -> None:
+        self.variance = variance
+        self.bound = bound
+
+    def as_variable(self) -> TypeVariable:
+        return TypeVariable(self)
 
 
-class TypeConstructor(abc.ABC):
-    id: ID
-    type_parameters: t.List[TypeParam]
-
-    @abc.abstractmethod
-    def concretize(self: _TyCon, scope: Scope) -> _TyCon:
-        ...
-
-    def __hash__(self) -> int:
-        return hash(self.id)
-
-    def mangled_name(self) -> str:
-        return self.id.mangle() + "E"
+class Variance:
+    def is_satisfied(self, left: Type, right: Type) -> bool:
+        raise NotImplementedError()
 
 
-class Class(TypeConstructor):
-    id: ClassID
+class Invariant(Variance):
+    def is_satisfied(self, left: Type, right: Type) -> bool:
+        return left == right
 
-    def __init__(
-        self,
-        id_: ClassID,
-        type_parameters: t.List[TypeParam],
-        members: t.Dict[str, "Type"],
-        methods: t.Dict[str, "Function"],
-        superclass: t.Optional["ClassInstance"] = None,
-        is_array: bool = False,
-    ) -> None:
-        self.id = id_
-        self.type_parameters = type_parameters
-        self.members = members
-        self.methods = methods
-        self.superclass = superclass
-        # Allows for arr[i] in type check and gives hint to compiler about
-        # different memory layout (i.e. {T *data, int length})
-        self.is_array = is_array
-
-    def get_member(self, name: str) -> t.Optional["Type"]:
-        if name in self.members:
-            return self.members[name]
-        elif self.superclass is not None:
-            return self.superclass.get_member(name)
-        else:
-            return None
-
-    def get_method(self, name: str) -> t.Optional["Function"]:
-        if name in self.methods:
-            return self.methods[name]
-        elif self.superclass is not None:
-            return self.superclass.get_method(name)
-        else:
-            return None
-
-    def concretize(self, scope: Scope) -> "Class":
-        if not self.type_parameters:
-            return self
-
-        concrete_members = {
-            name: mem.concretize(scope) for name, mem in self.members.items()
-        }
-        new_id = ClassID(
-            name=self.id.name,
-            concrete_arguments=[
-                scope.get(p.var, p.var) for p in self.type_parameters
-            ],
-        )
-        concrete_methods: t.Dict[str, Function] = {}
-        for name, meth in self.methods.items():
-            concrete_methods[name] = meth.concretize(scope)
-            concrete_methods[name].id.class_id = new_id
-        concrete_superclass: t.Optional[ClassInstance] = None
-        if self.superclass is not None:
-            _sup = self.superclass.concretize(scope)
-            assert isinstance(_sup, ClassInstance)
-            concrete_superclass = _sup
-        return Class(
-            id_=new_id,
-            type_parameters=[],
-            members=concrete_members,
-            methods=concrete_methods,
-            superclass=concrete_superclass,
-            is_array=self.is_array,
-        )
-
-    def __eq__(self, other):
-        if isinstance(other, Class):  # type: ignore
-            return self.id == other.id
-        return NotImplemented
-
-    def __repr__(self) -> str:
-        if self.type_parameters:
-            params = "[%s]" % ", ".join(map(repr, self.type_parameters))
-        else:
-            params = ""
-        return f"<Class {self.id}{params}>"
+    def __eq__(self, other) -> bool:
+        if not isinstance(other, Variance):  # type: ignore
+            return NotImplemented
+        return isinstance(other, Invariant)
 
 
-def get_array_class() -> Class:
-    return Class(
-        id_=ClassID("joe.0virtual.Array"),
-        type_parameters=[TypeParam("T", TypeVar())],
-        members={"length": IntType()},
-        methods={},
-        is_array=True,
-    )
+class Contravariant(Variance):
+    def is_satisfied(self, left: Type, right: Type) -> bool:
+        return left == right or right.is_supertype_of(left)
+
+    def __eq__(self, other) -> bool:
+        if not isinstance(other, Variance):  # type: ignore
+            return NotImplemented
+        return isinstance(other, Contravariant)
 
 
-class Function(TypeConstructor):
-    id: FunctionID
+class Covariant(Variance):
+    def is_satisfied(self, left: Type, right: Type) -> bool:
+        return left == right or left.is_supertype_of(right)
 
-    def __init__(
-        self,
-        id_: FunctionID,
-        type_parameters: t.List[TypeParam],
-        formal_parameters: t.List["Type"],
-        return_type: "Type",
-        static: bool,
-    ):
-        self.id = id_
-        self.type_parameters = type_parameters
-        self.formal_parameters = formal_parameters
-        self.return_type = return_type
-        self.static = static
-
-    def concretize(self, scope: Scope) -> "Function":
-        if not self.type_parameters:
-            return self
-
-        return Function(
-            id_=FunctionID(
-                class_id=self.id.class_id,
-                name=self.id.name,
-                concrete_arguments=[
-                    scope[p.var] for p in self.type_parameters if p.var in scope
-                ],
-            ),
-            type_parameters=[
-                p for p in self.type_parameters if p.var not in scope
-            ],
-            formal_parameters=[
-                p.concretize(scope) for p in self.formal_parameters
-            ],
-            return_type=self.return_type.concretize(scope),
-            static=self.static,
-        )
-
-    def __eq__(self, other):
-        if isinstance(other, Function):  # type: ignore
-            return self.id == other.id
-        return NotImplemented
-
-    def __repr__(self) -> str:
-        if self.type_parameters:
-            type_params = "[%s]" % ", ".join(map(repr, self.type_parameters))
-        else:
-            type_params = ""
-        params = ", ".join(map(repr, self.formal_parameters))
-        ret_ty = repr(self.return_type)
-        return f"<Function {self.id}{type_params}({params}): {ret_ty}>"
-
-    def mangled_name(self) -> str:
-        mangled = super().mangled_name()
-
-        for param in self.formal_parameters:
-            mangled += param.mangled_name()
-
-        return mangled
+    def __eq__(self, other) -> bool:
+        if not isinstance(other, Variance):  # type: ignore
+            return NotImplemented
+        return isinstance(other, Covariant)
 
 
-class Type(abc.ABC):
-    @abc.abstractmethod
-    def is_subtype_of(self, other: "Type") -> bool:
-        ...
-
-    @abc.abstractmethod
-    def check(self, scope: Scope) -> None:
-        ...
-
-    @abc.abstractmethod
-    def concretize(self, scope: Scope) -> "Type":
-        ...
-
-    @abc.abstractmethod
-    def mangled_name(self) -> str:
-        ...
+class Type:
+    def is_supertype_of(self, other: Type) -> bool:
+        raise NotImplementedError()
 
 
-class VoidType(Type):
-    def is_subtype_of(self, other: Type) -> bool:
+class TopType(Type):
+    def is_supertype_of(self, other: Type) -> bool:
+        return True
+
+    def __eq__(self, other) -> bool:
+        if not isinstance(other, Type):  # type: ignore
+            return NotImplemented
+        return isinstance(other, TopType)
+
+
+class BottomType(Type):
+    def is_supertype_of(self, other: Type) -> bool:
         return False
 
-    def check(self, scope: Scope) -> None:
-        pass
-
-    def concretize(self, scope: Scope) -> Type:
-        return self
-
-    def __eq__(self, other):
-        if isinstance(other, VoidType):  # type: ignore
-            return True
-        return NotImplemented
-
-    def __hash__(self) -> int:
-        return hash("void")
-
-    def __repr__(self) -> str:
-        return "void"
-
-    def mangled_name(self) -> str:
-        return "v"
+    def __eq__(self, other) -> bool:
+        if not isinstance(other, Type):  # type: ignore
+            return NotImplemented
+        return isinstance(other, BottomType)
 
 
-class TypeVar(Type):
-    def is_subtype_of(self, other: Type) -> bool:
-        return self is other
+class TypeVariable(Type):
+    def __init__(self, parameter: TypeParameter) -> None:
+        self.parameter = parameter
 
-    def check(self, scope: Scope) -> None:
-        if self not in scope:
-            raise TypeError(f"Unbound type variable {self!r}")
+    def is_supertype_of(self, other: Type) -> bool:
+        # If this variable is a covariant type parameter, it could be its bound
+        # or any subtype of its bound.
+        # If it's a contravariant type parameter, it could be its bound or any
+        # supertype of its bound.
+        # Therefore, this variable "is a supertype" (i.e. `other` is compatible
+        # with it) if `other` is related to the bounding type according to the
+        # variance declared by the type parameter. (I think)
+        return self.parameter.variance.is_satisfied(self.parameter.bound, other)
 
-    def concretize(self, scope: Scope) -> Type:
-        return scope.get(self, self)
-
-    def mangled_name(self) -> str:
-        raise JoeUnreachable()
-
-
-class IntType(Type):
-    def is_subtype_of(self, other: Type) -> bool:
-        return self is other
-
-    def check(self, scope: Scope) -> None:
-        pass
-
-    def concretize(self, scope: Scope) -> Type:
-        return self
-
-    def __eq__(self, other):
-        if isinstance(other, IntType):  # type: ignore
-            return True
-        return NotImplemented
-
-    def __hash__(self) -> int:
-        return hash("int")
-
-    def __repr__(self) -> str:
-        return "int"
-
-    def mangled_name(self) -> str:
-        return "i"
+    def __eq__(self, other) -> bool:
+        if not isinstance(other, Type):  # type: ignore
+            return NotImplemented
+        elif not isinstance(other, TypeVariable):
+            return False
+        return self.parameter is other.parameter
 
 
-class DoubleType(Type):
-    def is_subtype_of(self, other: Type) -> bool:
-        return self is other
-
-    def check(self, scope: Scope) -> None:
-        pass
-
-    def concretize(self, scope: Scope) -> Type:
-        return self
-
-    def __eq__(self, other):
-        if isinstance(other, DoubleType):  # type: ignore
-            return True
-        return NotImplemented
-
-    def __hash__(self) -> int:
-        return hash("double")
-
-    def __repr__(self) -> str:
-        return "double"
-
-    def mangled_name(self) -> str:
-        return "d"
-
-
-class Instance(Type, abc.ABC):
-    def __init__(self, tycon: TypeConstructor, arguments: t.List[Type]) -> None:
-        self.tycon = tycon
+class Instance(Type):
+    def __init__(
+        self, type_constructor: TypeConstructor, arguments: list[Type]
+    ) -> None:
+        self.type_constructor = type_constructor
         self.arguments = arguments
 
-    @abc.abstractmethod
-    def is_subtype_of(self, other: Type) -> bool:
-        ...
+    def is_supertype_of(self, other: Type) -> bool:
+        if not isinstance(other, Instance) or self == other:
+            return False
+        if self.type_constructor == other.type_constructor:
+            return all(
+                p.variance.is_satisfied(l, r)
+                for p, l, r in zip(
+                    self.type_constructor.parameters,
+                    self.arguments,
+                    other.arguments,
+                )
+            )
+        for parent in other.type_constructor.parents():
+            if self == parent or self.is_supertype_of(parent):
+                return True
+        return False
 
-    def _create_scope(self) -> t.Mapping[TypeVar, Type]:
-        return dict(
-            zip((p.var for p in self.tycon.type_parameters), self.arguments)
+    def __eq__(self, other) -> bool:
+        if not isinstance(other, Type):  # type: ignore
+            return NotImplemented
+        elif not isinstance(other, Instance):
+            return False
+        return (
+            self.type_constructor == other.type_constructor
+            and self.arguments == other.arguments
         )
 
-    def check(self, scope: Scope) -> None:
-        if len(self.arguments) != len(self.tycon.type_parameters):
-            raise TypeError(
-                f"Incorrect number of type arguments for {self.tycon.id}"
-            )
 
-    def concretize(self, scope: Scope) -> Type:
-        concrete_args = [arg.concretize(scope) for arg in self.arguments]
+# Tests
 
-        if any(isinstance(arg, TypeVar) for arg in concrete_args):
-            return self.__class__(self.tycon, concrete_args)
+bottom = BottomType()
+top = TopType()
+object_instance = Instance(TypeConstructor([], top), [])
 
-        concrete_scope = {
-            var: ty.concretize(scope)
-            for var, ty in self._create_scope().items()
-        }
-        concrete_tycon = self.tycon.concretize(concrete_scope)
-        return self.__class__(concrete_tycon, [])
+A = TypeConstructor([], object_instance)
+B = TypeConstructor([], Instance(A, []))
 
-    def __eq__(self, other):
-        if isinstance(other, Instance):  # type: ignore
-            if not self.arguments and not other.arguments:
-                return self.tycon == other.tycon
-            return self.concretize({}) == other.concretize({})
-        return NotImplemented
+# Invariant type parameter
+C = TypeConstructor([TypeParameter(Invariant(), top)], object_instance)
+assert not Instance(C, [Instance(A, [])]).is_supertype_of(
+    Instance(C, [Instance(B, [])])
+)
+assert not Instance(C, [Instance(B, [])]).is_supertype_of(
+    Instance(C, [Instance(A, [])])
+)
+assert Instance(C, [Instance(A, [])]) == Instance(C, [Instance(A, [])])
 
-    def __hash__(self) -> int:
-        return hash((self.tycon.id, tuple(self.arguments)))
+# Covariant type parameter
+D = TypeConstructor([TypeParameter(Covariant(), top)], object_instance)
+assert Instance(D, [Instance(A, [])]).is_supertype_of(
+    Instance(D, [Instance(B, [])])
+)
+assert not Instance(D, [Instance(B, [])]).is_supertype_of(
+    Instance(D, [Instance(A, [])])
+)
 
-    def __repr__(self) -> str:
-        if self.arguments:
-            args = "[%s]" % ", ".join(map(repr, self.arguments))
-        else:
-            args = ""
-        return f"<{self.__class__.__name__} of {self.tycon}{args}>"
+# Contravariant type parameter
+E = TypeConstructor([TypeParameter(Contravariant(), top)], object_instance)
+assert Instance(E, [Instance(B, [])]).is_supertype_of(
+    Instance(E, [Instance(A, [])])
+)
+assert not Instance(E, [Instance(A, [])]).is_supertype_of(
+    Instance(E, [Instance(B, [])])
+)
 
-    def mangled_name(self) -> str:
-        return self.tycon.mangled_name()
+# Type constructor for all binary functions
+function2 = TypeConstructor(
+    [
+        TypeParameter(Contravariant(), top),
+        TypeParameter(Contravariant(), top),
+        TypeParameter(Covariant(), bottom),
+    ],
+    top,
+)
 
+function_type = Instance(
+    function2,
+    [
+        Instance(A, []),
+        Instance(B, []),
+        object_instance,
+    ],
+)
 
-class ClassInstance(Instance):
-    def __init__(self, class_: Class, arguments: t.List[Type]) -> None:
-        super().__init__(class_, arguments)
-        self.class_ = class_
+assert function_type.is_supertype_of(
+    Instance(
+        function2,
+        [
+            object_instance,
+            Instance(A, []),
+            Instance(B, []),
+        ],
+    )
+)
 
-    def is_subtype_of(self, other: Type) -> bool:
-        if isinstance(other, ClassInstance):
-            if self.class_.id == other.class_.id:
-                return True
-            elif self.class_.superclass is not None:
-                return self.class_.superclass.is_subtype_of(other)
-            else:
-                return False
-        else:
-            return False
-
-    def check(self, scope: Scope) -> None:
-        super().check(scope)
-        inner_scope = self._create_scope()
-        for type_ in self.class_.members.values():
-            type_.check(inner_scope)
-
-    def get_member(self, name: str) -> t.Optional[Type]:
-        return self.class_.concretize(self._create_scope()).get_member(name)
-
-    def get_method(self, name: str) -> t.Optional[Function]:
-        return self.class_.concretize(self._create_scope()).get_method(name)
-
-
-class FunctionInstance(Instance):
-    def __init__(self, function: Function, arguments: t.List[Type]) -> None:
-        super().__init__(function, arguments)
-        self.function = function
-
-    def is_subtype_of(self, other: Type) -> bool:
-        if isinstance(other, FunctionInstance):
-            # Function parameters are contravariant and return types are
-            # covariant.
-            if self.function.id == other.function.id:
-                return True
-            else:
-                params_all_supertype = all(
-                    b.is_subtype_of(a) or a == b
-                    for a, b in zip(
-                        self.function.formal_parameters,
-                        other.function.formal_parameters,
-                    )
-                )
-                return_type_subtype = (
-                    self.function.return_type == other.function.return_type
-                    or self.function.return_type.is_subtype_of(
-                        other.function.return_type
-                    )
-                )
-                return params_all_supertype and return_type_subtype
-        else:
-            return False
-
-    def check(self, scope: Scope) -> None:
-        super().check(scope)
-        for param in self.function.formal_parameters:
-            param.check(scope)
-        self.function.return_type.check(scope)
-
-
-# int_ty = IntType()
-# double_ty = DoubleType()
-#
-# T = TypeVar()
-# U = TypeVar()
-# V = TypeVar()
-# W = TypeVar()
-# X = TypeVar()
-#
-# """
-# class super<W>                     { hello: W }
-# class inner<T, V> extends super<V> { test: T }
-# class outer<U>                     { inner: inner<U, int> }
-# """
-# container = Class(
-#     id_=ClassID("container"),
-#     type_parameters=[TypeParam("T", T)],
-#     members={"thing": T},
-#     methods={
-#         "get": Function(
-#             id_=FunctionID(ClassID("container"), "get"),
-#             type_parameters=[],
-#             formal_parameters=[],
-#             return_type=T,
-#         ),
-#         "set": Function(
-#             id_=FunctionID(ClassID("container"), "set"),
-#             type_parameters=[],
-#             formal_parameters=[T],
-#             return_type=None,
-#         ),
-#     },
-# )
-# superclass = Class(
-#     id_=ClassID("super"),
-#     type_parameters=[TypeParam("W", W)],
-#     members={"hello": W},
-#     methods={
-#         "some_func": Function(
-#             id_=FunctionID(ClassID("super"), "some_func"),
-#             type_parameters=[TypeParam("X", X)],
-#             formal_parameters=[W, ClassInstance(container, [X])],
-#             return_type=None,
-#         ),
-#     },
-# )
-# inner = Class(
-#     id_=ClassID("inner"),
-#     type_parameters=[TypeParam("T", T), TypeParam("V", V)],
-#     members={"test": T},
-#     methods={},
-#     superclass=ClassInstance(superclass, [V]),
-# )
-# outer = Class(
-#     id_=ClassID("outer"),
-#     type_parameters=[TypeParam("U", U)],
-#     members={"inner": ClassInstance(inner, [U, int_ty])},
-#     methods={},
-# )
-#
-# inst = ClassInstance(outer, [int_ty])
-# inst.check({})
-# c = inst.concretize({})
-# c.check({})
-# assert isinstance(c, ClassInstance)
-#
-# # typeof((new outer<int>()).inner.test)
-# print(inst.get_member("inner").get_member("test"))  # type: ignore
-# print(c.get_member("inner").get_member("test"))  # type: ignore
-# # typeof((new outer<int>()).inner.hello)
-# print(c.get_member("inner").get_member("hello"))  # type: ignore
-#
-# print(c.get_member("inner"), ClassInstance(superclass, [int_ty]).concretize({}))
-#
-# # (new outer<int>()).inner instanceof super<int>
-# print(
-#     c.get_member("inner").is_subtype_of(ClassInstance(superclass, [int_ty]).concretize({}))  # type: ignore
-# )
-# # (new outer<int>()).inner instanceof super<double>
-# print(
-#     c.get_member("inner").is_subtype_of(ClassInstance(superclass, [double_ty]).concretize({}))  # type: ignore
-# )
-#
-# print(
-#     c.get_member("inner").get_method("some_func"),
-# )
-# print(
-#     FunctionInstance(
-#         c.get_member("inner").get_method("some_func"), [double_ty]
-#     ).concretize({})
-# )
-#
-# # function A(Animal): Cat
-# # function B(Cat): Animal
-# # assert: A <: B
-#
-#
-# Animal = Class(
-#     id_=ClassID("Animal"),
-#     type_parameters=[],
-#     members={},
-#     methods={},
-# )
-# Cat = Class(
-#     id_=ClassID("Cat"),
-#     type_parameters=[],
-#     members={},
-#     methods={},
-#     superclass=ClassInstance(Animal, []),
-# )
-#
-# A = FunctionInstance(
-#     Function(
-#         id_=FunctionID(ClassID("whatever"), "A"),
-#         type_parameters=[],
-#         formal_parameters=[ClassInstance(Animal, [])],
-#         return_type=ClassInstance(Cat, []),
-#     ),
-#     [],
-# )
-# B = FunctionInstance(
-#     Function(
-#         id_=FunctionID(ClassID("whatever"), "B"),
-#         type_parameters=[],
-#         formal_parameters=[ClassInstance(Cat, [])],
-#         return_type=ClassInstance(Animal, []),
-#     ),
-#     [],
-# )
-#
-# assert A.is_subtype_of(B)
-# assert not B.is_subtype_of(A)
+# When visiting class body
+# Context of type parameters in scope
+# Any occurrence of a type variable gets associated with the parameter it's
+# referring to
+# The representation of a class will be composed of:
+# - Type constructor
+# - Method and field types by name (could be `TypeVariable`s)
+# - References to each monomorphisation of the class
+# Monomorphisation involves:
+# - Check for an existing monomorphised instance
+# - Create a new type constructor which has no type parameters
+# - For each method or field
+#   - Replace any occurrence of a type variable with the monomorphised type of
+#     the corresponding parameter
+#   - Monomorphise the type of the field
+# - Store a reference to the monomorphised class instance alongside the class

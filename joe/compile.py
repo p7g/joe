@@ -1,57 +1,87 @@
 import typing as t
+from patina import Option, None_
 from typing_extensions import TypeGuard
-from joe import ast, cnodes, typesys
-from joe.context import GlobalContext
+
+from joe import ast, cnodes, mangle, objects, typesys
+from joe.context import GlobalContext, TypeContext
 from joe.exc import JoeUnreachable
 from joe.parse import ModulePath
-from joe.typevisitor import MethodExprTypeVisitor
+from joe.typevisitor import Arrays, MethodExprTypeVisitor
 from joe.visitor import Visitor
-from patina import Option, None_
 
 
 def prefix_ident(name: str) -> str:
     return f"__joe_{name}"
 
 
-def get_class_name(class_: typesys.Class) -> str:
-    return prefix_ident(class_.mangled_name())
+def _get_type_name(ctx: TypeContext, ty: typesys.Type) -> str:
+    assert isinstance(ty, typesys.Instance)
+    class_info = ctx.get_class_info(ty.type_constructor)
+    if class_info is None:
+        path = ctx.get_primitive_name(ty.type_constructor)
+    else:
+        path = class_info.id.name
+    return mangle.mangle_name(
+        path, [_get_type_name(ctx, arg) for arg in ty.arguments]
+    )
 
 
-def get_class_member_name(class_: typesys.Class, member: str) -> str:
-    name = prefix_ident(class_.id.mangle())
+def get_type_name(ctx: TypeContext, ty: typesys.Instance) -> str:
+    return prefix_ident(_get_type_name(ctx, ty))
+
+
+def get_class_member_name(
+    ctx: TypeContext, ty: typesys.Instance, member: str
+) -> str:
+    class_name = get_type_name(ctx, ty)
     # FIXME: name mangling logic is leaking
-    return f"{name}{len(member)}{member}E"
+    return f"{class_name}{len(member)}{member}E"
 
 
-def get_class_method_impl_name(function: typesys.FunctionInstance) -> str:
-    return prefix_ident(function.mangled_name())
+def get_class_method_impl_name(
+    ctx: TypeContext,
+    obj_ty: typesys.Instance,
+    meth_name: str,
+    meth_ty: typesys.Instance,
+) -> str:
+    assert meth_ty.type_constructor.is_function
+    member_name = _get_type_name(ctx, obj_ty) + f"{len(meth_name)}{meth_name}"
+    member_name += mangle.type_suffix(
+        [_get_type_name(ctx, arg) for arg in meth_ty.arguments]
+    )
+    return prefix_ident(member_name + "E")
 
 
-def get_class_data_name(class_: typesys.Class) -> str:
-    name = get_class_name(class_)
+def get_class_data_name(ctx: TypeContext, obj: typesys.Instance) -> str:
+    name = get_type_name(ctx, obj)
     return f"{name}_data"
 
 
-def get_class_vtable_name(class_: typesys.Class) -> str:
-    name = get_class_name(class_)
+def get_class_vtable_name(ctx: TypeContext, obj: typesys.Instance) -> str:
+    name = get_type_name(ctx, obj)
     return f"{name}_vtable"
 
 
-def get_ctype(typ: typesys.Type) -> cnodes.CType:
-    if isinstance(typ, typesys.IntType):
+def get_ctype(ctx: TypeContext, typ: typesys.Type) -> cnodes.CType:
+    if isinstance(
+        typ, typesys.Instance
+    ) and typ.type_constructor == ctx.get_type_constructor("int"):
         return cnodes.CNamedType("int")
-    elif isinstance(typ, typesys.DoubleType):
+    elif isinstance(
+        typ, typesys.Instance
+    ) and typ.type_constructor == ctx.get_type_constructor("double"):
         return cnodes.CNamedType("double")
-    elif isinstance(typ, typesys.VoidType):
+    elif isinstance(typ, typesys.BottomType):
         return cnodes.CNamedType("void")
-    elif isinstance(typ, typesys.ClassInstance):
-        return cnodes.CStructType(get_class_name(typ.class_))
-    elif isinstance(typ, typesys.FunctionInstance):
+    elif (
+        isinstance(typ, typesys.Instance)
+        and not typ.type_constructor.is_function
+    ):
+        return cnodes.CStructType(get_type_name(ctx, typ))
+    elif isinstance(typ, typesys.Instance) and typ.type_constructor.is_function:
         return cnodes.CFuncType(
-            return_type=get_ctype(typ.function.return_type),
-            parameter_types=[
-                get_ctype(p) for p in typ.function.formal_parameters
-            ],
+            return_type=get_ctype(ctx, typ.arguments[-1]),
+            parameter_types=[get_ctype(ctx, p) for p in typ.arguments[:-1]],
         )
     else:
         raise NotImplementedError(typ)
@@ -93,8 +123,11 @@ def get_local_name(name: str) -> str:
     return f"__joe_local_{name}"
 
 
-def is_array_type(ty: typesys.Type) -> TypeGuard[typesys.ClassInstance]:
-    return isinstance(ty, typesys.ClassInstance) and ty.class_.is_array
+def is_array_type(ty: typesys.Type) -> TypeGuard[typesys.Instance]:
+    return (
+        isinstance(ty, typesys.Instance)
+        and ty.type_constructor == Arrays.get_type_constructor()
+    )
 
 
 def get_array_length(expr: cnodes.CExpr) -> cnodes.CExpr:
@@ -116,24 +149,31 @@ def make_assign_stmt(
     return cnodes.CExprStmt(cnodes.CAssignmentExpr(dest, value))
 
 
-def get_array_name(array_ty: typesys.Type) -> str:
+def get_array_name(ctx: TypeContext, array_ty: typesys.Type) -> str:
     assert is_array_type(array_ty)
-    return prefix_ident(array_ty.mangled_name())
+    return prefix_ident(
+        mangle.mangle_name(
+            "joe.0virtual.Array", [_get_type_name(ctx, array_ty.arguments[0])]
+        )
+    )
 
 
-def make_array_struct(array_ty: typesys.Type) -> cnodes.CStruct:
+def make_array_struct(
+    ctx: TypeContext, array_ty: typesys.Type
+) -> cnodes.CStruct:
     assert is_array_type(array_ty)
+    int_tycon = ctx.get_type_constructor("int")
+    assert int_tycon is not None
     return cnodes.CStruct(
-        get_array_name(array_ty),
+        get_array_name(ctx, array_ty),
         fields=[
             cnodes.CStructField(
                 name="elements",
-                type=get_ctype(
-                    array_ty.class_.id.concrete_arguments[0]
-                ).as_pointer(),
+                type=get_ctype(ctx, array_ty.arguments[0]).as_pointer(),
             ),
             cnodes.CStructField(
-                name="length", type=get_ctype(typesys.IntType())
+                name="length",
+                type=get_ctype(ctx, typesys.Instance(int_tycon, [])),
             ),
         ],
     )
@@ -154,61 +194,82 @@ def make_malloc(type_: cnodes.CType) -> cnodes.CExpr:
 class CompileContext:
     def __init__(self, global_ctx: GlobalContext) -> None:
         self.global_ctx = global_ctx
-        self.emitted_arrays: t.Set[typesys.ClassID] = set()
+        self.emitted_arrays: t.Set[typesys.Type] = set()
         self.code_unit = cnodes.CCodeUnit()
 
 
 def emit_array(ctx: CompileContext, array_ty: typesys.Type) -> None:
     assert is_array_type(array_ty)
-    if array_ty.class_.id in ctx.emitted_arrays:
+    if array_ty.arguments[0] in ctx.emitted_arrays:
         return
-    array_struct = make_array_struct(array_ty)
+    array_struct = make_array_struct(ctx.global_ctx.type_ctx, array_ty)
     ctx.code_unit.structs.append(array_struct)
-    ctx.emitted_arrays.add(array_ty.class_.id)
+    ctx.emitted_arrays.add(array_ty.arguments[0])
 
 
 class CompileVisitor(Visitor):
     def __init__(self, ctx: GlobalContext) -> None:
         self.ctx = CompileContext(ctx)
         self.ctx.code_unit.includes.append("stdlib.h")
-        self.class_stack: t.List[typesys.Class] = []
+        self.class_stack: t.List[objects.ClassInfo] = []
+
+    @property
+    def type_ctx(self) -> TypeContext:
+        return self.ctx.global_ctx.type_ctx
 
     def visit_ClassDeclaration(self, node: ast.ClassDeclaration) -> None:
-        class_ty = self.ctx.global_ctx.type_scope[node.name.value]
-        assert isinstance(class_ty, typesys.Class)
-        self.class_stack.append(class_ty)
+        class_ty = self.type_ctx.get_type_constructor(node.name.value)
+        assert class_ty is not None
+        class_info = self.type_ctx.get_class_info(class_ty)
+        assert class_info is not None
+        self.class_stack.append(class_info)
 
-        data_ctype = cnodes.CStruct(name=get_class_data_name(class_ty))
-        for name, field_ty in class_ty.members.items():
-            if is_array_type(field_ty):
-                emit_array(self.ctx, field_ty)
-            data_ctype.fields.append(
-                cnodes.CStructField(
-                    name=name,
-                    type=get_ctype(field_ty),
-                )
+        data_ctype = cnodes.CStruct(
+            name=get_class_data_name(
+                self.type_ctx, typesys.Instance(class_ty, [])
             )
+        )
+        vtable_ctype = cnodes.CStruct(
+            name=get_class_vtable_name(
+                self.type_ctx, typesys.Instance(class_ty, [])
+            )
+        )
 
-        vtable_ctype = cnodes.CStruct(name=get_class_vtable_name(class_ty))
-        for name, meth_ty in class_ty.methods.items():
-            if is_array_type(meth_ty.return_type):
-                emit_array(self.ctx, meth_ty.return_type)
-            for param in meth_ty.formal_parameters:
-                if is_array_type(param):
-                    emit_array(self.ctx, param)
+        for name, attr in class_info.attributes.items():
+            if isinstance(attr, objects.Field):
+                field = attr
+                if is_array_type(attr.type):
+                    emit_array(self.ctx, attr.type)
+                data_ctype.fields.append(
+                    cnodes.CStructField(
+                        name=name,
+                        type=get_ctype(self.type_ctx, attr.type),
+                    )
+                )
 
-            if not meth_ty.static:
-                meth_cty = get_ctype(typesys.FunctionInstance(meth_ty, []))
-                assert isinstance(meth_cty, cnodes.CFuncType)
-                meth_cty.parameter_types.insert(
-                    0, get_ctype(typesys.ClassInstance(class_ty, []))
-                )
-                vtable_ctype.fields.append(
-                    cnodes.CStructField(name=name, type=meth_cty)
-                )
+            elif isinstance(attr, objects.Method):
+                method = attr
+                if is_array_type(method.return_type):
+                    emit_array(self.ctx, method.return_type)
+                for param in method.parameter_types:
+                    if is_array_type(param):
+                        emit_array(self.ctx, param)
+
+                if not method.static:
+                    meth_cty = get_ctype(self.type_ctx, method.type)
+                    assert isinstance(meth_cty, cnodes.CFuncType)
+                    meth_cty.parameter_types.insert(
+                        0,
+                        get_ctype(
+                            self.type_ctx, typesys.Instance(class_ty, [])
+                        ),
+                    )
+                    vtable_ctype.fields.append(
+                        cnodes.CStructField(name=name, type=meth_cty)
+                    )
 
         class_ctype = cnodes.CStruct(
-            name=get_class_name(class_ty),
+            name=get_type_name(self.type_ctx, typesys.Instance(class_ty, [])),
             fields=[
                 cnodes.CStructField(
                     name="data",
@@ -239,10 +300,14 @@ class CompileVisitor(Visitor):
                 value=cnodes.CArrayLiteral(
                     [
                         cnodes.CVariable(
-                            get_class_member_name(class_ty, meth_name)
+                            get_class_member_name(
+                                self.type_ctx,
+                                typesys.Instance(class_ty, []),
+                                meth_name,
+                            )
                         )
-                        for meth_name, meth_ty in class_ty.methods.items()
-                        if not meth_ty.static
+                        for meth_name, meth in class_info.attributes.items()
+                        if isinstance(meth, objects.Method) and not meth.static
                     ]
                 ),
             )
@@ -252,30 +317,33 @@ class CompileVisitor(Visitor):
 
     def visit_Method(self, node: ast.Method) -> None:
         class_ty = self.class_stack[-1]
-        meth_ty = class_ty.get_method(node.name.value)
-        assert meth_ty is not None
+        meth = class_ty.attributes[node.name.value]
+        assert isinstance(meth, objects.Method)
 
-        comp = MethodCompiler(self.ctx, class_ty, meth_ty, node)
+        comp = MethodCompiler(self.ctx, class_ty, meth, node)
         comp.run()
         func = comp.cfunction.take().unwrap()
         self.ctx.code_unit.functions.append(func)
 
     def compile_main_function(self, name: str):
         class_path, meth_name = name.rsplit(".")
-        cls_ty = self.ctx.global_ctx.type_scope[class_path]
-        if not isinstance(cls_ty, typesys.Class):
+        cls_ty = self.type_ctx.get_type_constructor(class_path)
+        class_info = self.type_ctx.get_class_info(cls_ty) if cls_ty else None
+        if cls_ty is None or class_info is None:
             # FIXME: Another exception type?
             raise Exception(f"Invalid class for main method: {class_path}")
-        meth_ty = cls_ty.get_method(meth_name)
-        if meth_ty is None:
+        meth = class_info.attributes.get(meth_name)
+        if not isinstance(meth, objects.Method):
             raise Exception(f"No such method: {meth_name}")
         if (
-            not isinstance(meth_ty.return_type, typesys.VoidType)
-            or not meth_ty.static
-            or meth_ty.formal_parameters
+            not isinstance(meth.return_type, typesys.BottomType)
+            or not meth.static
+            or meth.parameter_types
         ):
             raise Exception(f"Invalid signature for main method: {meth_name}")
-        main_name = get_class_member_name(cls_ty, meth_name)
+        main_name = get_class_member_name(
+            self.type_ctx, typesys.Instance(cls_ty, []), meth_name
+        )
         main_func = cnodes.CFunc(
             name="main",
             return_type=cnodes.CNamedType("int"),
@@ -298,8 +366,8 @@ class MethodCompiler(Visitor):
     def __init__(
         self,
         ctx: CompileContext,
-        class_ty: typesys.Class,
-        meth_ty: typesys.Function,
+        class_ty: objects.ClassInfo,
+        meth_ty: objects.Method,
         meth_node: ast.Method,
     ) -> None:
         self.ctx = ctx
@@ -308,7 +376,7 @@ class MethodCompiler(Visitor):
         self.meth_node = meth_node
         self.cfunction: Option[cnodes.CFunc] = None_()
         vis = MethodExprTypeVisitor(
-            ctx.global_ctx.type_scope,
+            ctx.global_ctx.type_ctx,
             class_ty,
             meth_ty,
             meth_node,
@@ -318,19 +386,27 @@ class MethodCompiler(Visitor):
         self.last_expr: Option[cnodes.CExpr] = None_()
         self.receiver: Option[cnodes.CExpr] = None_()
 
+    @property
+    def type_ctx(self) -> TypeContext:
+        return self.ctx.global_ctx.type_ctx
+
     def get_node_type(self, node: ast.Node) -> typesys.Type:
         return self.expr_types[node]
 
     def new_variable(self, type_: typesys.Type) -> cnodes.CAssignmentTarget:
         locs = self.cfunction.unwrap().locals
         new_loc_name = get_local_name(str(len(locs)))
-        locs.append(cnodes.CVarDecl(name=new_loc_name, type=get_ctype(type_)))
+        locs.append(
+            cnodes.CVarDecl(
+                name=new_loc_name, type=get_ctype(self.type_ctx, type_)
+            )
+        )
         return cnodes.CVariable(new_loc_name)
 
     def cache_in_local(
         self, expr: cnodes.CExpr, type_: typesys.Type
     ) -> cnodes.CExpr:
-        if isinstance(type_, typesys.VoidType):
+        if isinstance(type_, typesys.BottomType):
             return expr
         var = self.new_variable(type_)
         self.cfunction.unwrap().body.append(make_assign_stmt(var, expr))
@@ -341,15 +417,19 @@ class MethodCompiler(Visitor):
 
     def visit_Method(self, node: ast.Method) -> None:
         func = cnodes.CFunc(
-            name=get_class_member_name(self.class_ty, node.name.value),
-            return_type=get_ctype(self.meth_ty.return_type),
+            name=get_class_member_name(
+                self.type_ctx,
+                typesys.Instance(self.class_ty.type, []),
+                node.name.value,
+            ),
+            return_type=get_ctype(self.type_ctx, self.meth_ty.return_type),
             parameters=[
                 cnodes.CParam(
                     name=get_local_name(param.name.value),
-                    type=get_ctype(ty),
+                    type=get_ctype(self.type_ctx, ty),
                 )
                 for param, ty in zip(
-                    node.parameters, self.meth_ty.formal_parameters
+                    node.parameters, self.meth_ty.parameter_types
                 )
             ],
             locals=[],
@@ -361,7 +441,9 @@ class MethodCompiler(Visitor):
                 0,
                 cnodes.CParam(
                     name="self",
-                    type=get_ctype(typesys.ClassInstance(self.class_ty, [])),
+                    type=get_ctype(
+                        self.type_ctx, typesys.Instance(self.class_ty.type, [])
+                    ),
                 ),
             )
 
@@ -385,10 +467,17 @@ class MethodCompiler(Visitor):
     def visit_IdentExpr(self, node: ast.IdentExpr) -> None:
         ty = self.get_node_type(node)
         expr: cnodes.CExpr
-        if isinstance(ty, typesys.FunctionInstance):
-            if ty.function.static:
+        assert isinstance(ty, typesys.Instance)
+        if ty.type_constructor.is_function:
+            func = self.class_ty.attributes[node.name]
+            assert isinstance(func, objects.Method)
+            if func.static:
                 expr = cnodes.CVariable(
-                    get_class_member_name(self.class_ty, node.name)
+                    get_class_member_name(
+                        self.type_ctx,
+                        typesys.Instance(self.class_ty.type, []),
+                        node.name,
+                    )
                 )
             else:
                 expr = get_self_vtable_member(node.name)
@@ -399,7 +488,10 @@ class MethodCompiler(Visitor):
             # It's a local variable. Scopes should already be flattened, so
             # variables are function-scoped.
             expr = cnodes.CVariable(get_local_name(node.name))
-        elif node.name in self.class_ty.members:
+        elif node.name in self.class_ty.attributes:
+            assert isinstance(
+                self.class_ty.attributes[node.name], objects.Field
+            )
             # It's accessing a field on self.
             expr = get_self_data_member(node.name)
         else:
@@ -413,10 +505,27 @@ class MethodCompiler(Visitor):
         self.visit_Expr(node.target)
         target = self.last_expr.take().unwrap()
         func_ty = self.get_node_type(node.target)
-        assert isinstance(func_ty, typesys.FunctionInstance)
+        assert isinstance(func_ty, typesys.Instance)
+        assert func_ty.type_constructor.is_function
+
+        # FIXME: it should be easier to get the method info
+        assert isinstance(node.target, (ast.IdentExpr, ast.DotExpr))
+        if isinstance(node.target, ast.IdentExpr):
+            class_info = self.class_ty
+            meth_name = node.target.name
+        elif isinstance(node.target, ast.DotExpr):
+            recv_ty = self.get_node_type(node.target.left)
+            assert isinstance(recv_ty, typesys.Instance)
+            class_info2 = self.type_ctx.get_class_info(recv_ty.type_constructor)
+            assert class_info2 is not None
+            class_info = class_info2
+            meth_name = node.target.name
+
+        meth_info = class_info.attributes[meth_name]
+        assert isinstance(meth_info, objects.Method)
 
         args = []
-        if not func_ty.function.static:
+        if not meth_info.static:
             receiver = self.receiver.take().unwrap()
             args.append(receiver)
 
@@ -444,15 +553,18 @@ class MethodCompiler(Visitor):
         right = self.last_expr.take().unwrap()
         left_ty = self.get_node_type(node.left)
         right_ty = self.get_node_type(node.right)
-        if isinstance(left_ty, typesys.DoubleType) ^ isinstance(
-            right_ty, typesys.DoubleType
-        ):
-            to_cast = left if isinstance(left_ty, typesys.DoubleType) else right
-            casted = cnodes.CCast(to_cast, get_ctype(typesys.DoubleType()))
-            if isinstance(left_ty, typesys.DoubleType):
-                left = casted
-            else:
+
+        double_tycon = self.type_ctx.get_type_constructor("double")
+        assert double_tycon
+        double_ty = typesys.Instance(double_tycon, [])
+
+        if (left_ty == double_ty) ^ (right_ty == double_ty):
+            to_cast = left if right_ty == double_ty else right
+            casted = cnodes.CCast(to_cast, get_ctype(self.type_ctx, double_ty))
+            if left_ty == double_ty:
                 right = casted
+            else:
+                left = casted
         self.last_expr.replace(
             cnodes.CBinExpr(left=left, right=right, op=cnodes.BinOp.Add)
         )
@@ -461,44 +573,48 @@ class MethodCompiler(Visitor):
         self.visit_Expr(node.left)
         left = self.last_expr.take().unwrap()
         left_ty = self.get_node_type(node.left)
-        assert isinstance(left_ty, typesys.ClassInstance)
+        assert isinstance(left_ty, typesys.Instance)
 
         if is_array_type(left_ty):
             # The only field on an array (no data struct)
             assert node.name == "length"
             expr = get_array_length(left)
         else:
-            mem = left_ty.get_member(node.name)
-            if mem is not None:
+            class_info = self.type_ctx.get_class_info(left_ty.type_constructor)
+            assert class_info is not None
+            mem = class_info.attributes[node.name]
+            if isinstance(mem, objects.Field):
                 expr = get_data_member(left, node.name)
-            else:
-                meth = left_ty.get_method(node.name)
-                assert meth is not None
+            elif isinstance(mem, objects.Method):
                 expr = get_vtable_member(left, node.name)
                 self.receiver.replace(left)
+            else:
+                raise JoeUnreachable()
 
         self.last_expr.replace(expr)
 
     def visit_NewExpr(self, node: ast.NewExpr) -> None:
-        obj_var = self.new_variable(self.get_node_type(node))
         obj_ty = self.get_node_type(node)
-        assert isinstance(obj_ty, typesys.ClassInstance)
-        class_ty = obj_ty.class_
+        obj_var = self.new_variable(obj_ty)
+        assert isinstance(obj_ty, typesys.Instance)
+        class_info = self.type_ctx.get_class_info(obj_ty.type_constructor)
+        assert class_info is not None
 
         create_data = make_assign_stmt(
             get_member(obj_var, "data"),
-            make_malloc(cnodes.CStructType(get_class_data_name(class_ty))),
+            make_malloc(cnodes.CStructType(get_class_data_name(self.type_ctx, obj_ty))),
         )
         create_vtable = make_assign_stmt(
             get_member(obj_var, "vtable"),
-            cnodes.CRef(cnodes.CVariable(get_class_vtable_name(class_ty))),
+            cnodes.CRef(cnodes.CVariable(get_class_vtable_name(self.type_ctx, obj_ty))),
         )
 
         cfunc = self.cfunction.unwrap()
         cfunc.body.extend([create_data, create_vtable])
 
-        unqualified_name = ModulePath.from_class_path(class_ty.id.name)[-1]
-        constructor = obj_ty.get_method(unqualified_name)
+        unqualified_name = ModulePath.from_class_path(class_info.id.name)[-1]
+        constructor = class_info.attributes.get(unqualified_name)
+        assert constructor is None or isinstance(constructor, objects.Method)
         if constructor is not None:
             constructor_args: t.List[cnodes.CExpr] = [obj_var]
             for arg in node.arguments:
