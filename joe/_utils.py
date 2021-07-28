@@ -1,3 +1,4 @@
+import itertools
 import typing as t
 from patina import Option, None_
 
@@ -19,3 +20,11 @@ class Peekable(t.Generic[Peekable_T]):
 
     def peek(self) -> Peekable_T:
         return self._peeked.get_or_insert_with(lambda: next(self._it)).get()
+
+    def copy(self) -> "Peekable[Peekable_T]":
+        # Probably a pretty bad memory leak
+        self._it, it_copy = itertools.tee(self._it)
+        peeked_copy = self._peeked.map(lambda v: v)
+        copied = Peekable(it_copy)
+        copied._peeked = peeked_copy
+        return copied

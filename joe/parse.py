@@ -4,7 +4,7 @@ import typing as t
 from patina import Option, None_
 
 from joe import ast
-from joe.lexer import TokenType, lex
+from joe.lexer import Token, TokenType, lex
 from joe.source import Location, JoeSyntaxError
 from joe._utils import Peekable
 
@@ -35,11 +35,24 @@ class ModulePath(t.List[str]):
         return ".".join(self)
 
 
+class _ParserSnapshot:
+    def __init__(self, tokens: Peekable[Token]) -> None:
+        self.tokens = tokens
+
+
 class Parser:
     def __init__(self, filename: str, contents: str):
-        self.filename = filename
+        self.filename: t.Final = filename
         self.tokens = Peekable(lex(filename, contents))
         self.modules: t.List[ast.Module] = []
+
+    def _take_snapshot(self) -> _ParserSnapshot:
+        # Don't mutate modules or its contents in between taking and applying a
+        # snapshot
+        return _ParserSnapshot(self.tokens.copy())
+
+    def _apply_snapshot(self, snapshot: _ParserSnapshot) -> None:
+        self.tokens = snapshot.tokens
 
     def parse_file(self) -> t.List[ast.Module]:
         imports, modules = self._parse_imports()
