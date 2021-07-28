@@ -134,6 +134,8 @@ class Visitor:
     def visit_Stmt(self, node: ast.Stmt):
         if isinstance(node, ast.ReturnStmt):
             self.visit_ReturnStmt(node)
+        elif isinstance(node, ast.DeleteStmt):
+            self.visit_DeleteStmt(node)
         elif isinstance(node, ast.ExprStmt):
             self.visit_ExprStmt(node)
         else:
@@ -142,6 +144,9 @@ class Visitor:
     def visit_ReturnStmt(self, node: ast.ReturnStmt):
         if node.expr is not None:
             self.visit_Expr(node.expr)
+
+    def visit_DeleteStmt(self, node: ast.DeleteStmt):
+        self.visit_Expr(node.expr)
 
     def visit_ExprStmt(self, node: ast.ExprStmt):
         self.visit_Expr(node.expr)

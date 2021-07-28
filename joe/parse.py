@@ -183,6 +183,11 @@ class Parser:
                 expr = self._parse_expr()
             self.tokens.next().expect(TokenType.SemiColon)
             return ast.ReturnStmt(location=tok.location, expr=expr)
+        elif tok.type == TokenType.Delete:
+            tok = self.tokens.next()
+            expr = self._parse_expr()
+            self.tokens.next().expect(TokenType.SemiColon)
+            return ast.DeleteStmt(location=tok.location, expr=expr)
         else:
             expr = self._parse_expr()
             self.tokens.next().expect(TokenType.SemiColon)

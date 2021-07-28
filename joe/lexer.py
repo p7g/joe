@@ -9,6 +9,7 @@ from joe.source import Location, JoeSyntaxError
 @enum.unique
 class TokenType(enum.IntEnum):
     Class = enum.auto()
+    Delete = enum.auto()
     Do = enum.auto()
     Extends = enum.auto()
     For = enum.auto()
@@ -72,6 +73,7 @@ class Token:
 
 _keywords = {
     "class": TokenType.Class,
+    "delete": TokenType.Delete,
     "do": TokenType.Do,
     "extends": TokenType.Extends,
     "for": TokenType.For,

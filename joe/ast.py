@@ -141,5 +141,10 @@ class ReturnStmt(Stmt):
 
 
 @dataclass(eq=False)
+class DeleteStmt(Stmt):
+    expr: Expr
+
+
+@dataclass(eq=False)
 class ExprStmt(Stmt):
     expr: Expr

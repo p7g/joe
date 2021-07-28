@@ -455,3 +455,14 @@ class MethodExprTypeVisitor(Visitor):
             and not self.method.return_type.is_supertype_of(ret_expr_ty)
         ):
             raise JoeTypeError(node.location, "Incorrect return type")
+
+    def visit_DeleteStmt(self, node: ast.DeleteStmt):
+        super().visit_DeleteStmt(node)
+
+        expr_ty = self.get_type(node.expr)
+        assert isinstance(expr_ty, typesys.Instance)
+
+        tycon = expr_ty.type_constructor
+        class_info = self.type_ctx.get_class_info(tycon)
+        if class_info is None:
+            raise JoeTypeError(node.expr.location, "Can't delete primitive value")

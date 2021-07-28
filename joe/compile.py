@@ -191,6 +191,15 @@ def make_malloc(type_: cnodes.CType) -> cnodes.CExpr:
     )
 
 
+def make_free(expr: cnodes.CExpr) -> cnodes.CStmt:
+    return cnodes.CExprStmt(
+        expr=cnodes.CCallExpr(
+            target=cnodes.CVariable("free"),
+            arguments=[expr],
+        )
+    )
+
+
 class CompileContext:
     def __init__(self, global_ctx: GlobalContext) -> None:
         self.global_ctx = global_ctx
@@ -458,6 +467,13 @@ class MethodCompiler(Visitor):
             cnodes.CExprStmt(self.last_expr.take().unwrap())
         )
 
+    def visit_DeleteStmt(self, node: ast.DeleteStmt) -> None:
+        super().visit_DeleteStmt(node)
+        # Free the data member of the object
+        self.cfunction.unwrap().body.append(
+            make_free(get_member(self.last_expr.take().unwrap(), "data"))
+        )
+
     def visit_ReturnStmt(self, node: ast.ReturnStmt) -> None:
         super().visit_ReturnStmt(node)
         ret_expr = self.last_expr.take()
@@ -602,11 +618,15 @@ class MethodCompiler(Visitor):
 
         create_data = make_assign_stmt(
             get_member(obj_var, "data"),
-            make_malloc(cnodes.CStructType(get_class_data_name(self.type_ctx, obj_ty))),
+            make_malloc(
+                cnodes.CStructType(get_class_data_name(self.type_ctx, obj_ty))
+            ),
         )
         create_vtable = make_assign_stmt(
             get_member(obj_var, "vtable"),
-            cnodes.CRef(cnodes.CVariable(get_class_vtable_name(self.type_ctx, obj_ty))),
+            cnodes.CRef(
+                cnodes.CVariable(get_class_vtable_name(self.type_ctx, obj_ty))
+            ),
         )
 
         cfunc = self.cfunction.unwrap()
