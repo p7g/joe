@@ -427,6 +427,7 @@ class CompileVisitor(Visitor):
                 ),
                 cnodes.CReturnStmt(cnodes.CInteger(0)),
             ],
+            static=False,
         )
         self.ctx.code_unit.functions.append(main_func)
 

@@ -127,12 +127,18 @@ class CFunc(CDecl):
     parameters: t.List[CParam]
     locals: t.List["CVarDecl"]
     body: t.List["CStmt"]
+    static: bool = True  # TODO: C interop
+
+    def _static(self) -> str:
+        return "static " if self.static else ""
 
     def _proto(self) -> str:
         params = ", ".join(
             [p.type.render_named(p.name) for p in self.parameters]
         )
-        return f"{self.return_type.render()} {self.name}({params})"
+        return (
+            f"{self._static()}{self.return_type.render()} {self.name}({params})"
+        )
 
     def emit_forward_decl(self, gen: Emitter) -> None:
         proto = self._proto()
