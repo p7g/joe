@@ -1,5 +1,5 @@
 final class simple {
-    int _n;
+    final int _n;
 
     void simple(int n) {
         _n = n;

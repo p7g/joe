@@ -69,4 +69,6 @@ class Method(Attribute):
 
 
 class Field(Attribute):
-    pass
+    def __init__(self, type_: typesys.Type, final: bool) -> None:
+        super().__init__(type_)
+        self.final = final

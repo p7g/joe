@@ -1,5 +1,4 @@
 import typing as t
-from contextlib import contextmanager
 from dataclasses import dataclass
 from joe import ast, objects, typesys
 from joe.context import TypeContext
@@ -85,7 +84,8 @@ class ClassDeclarationVisitor(Visitor):
                 node.location, f"Duplicate attribute name '{node.name.value}'"
             )
         self.ty.attributes[node.name.value] = objects.Field(
-            self.analyze_type(node.type)
+            self.analyze_type(node.type),
+            final=node.final,
         )
 
     def visit_Method(self, node: ast.Method):
@@ -177,6 +177,7 @@ class MethodExprTypeVisitor(ScopeVisitor):
         self.parameters: t.Dict[str, _Local] = {}
         self.locals: t.Dict[str, _Local] = {}
         self.expr_types: t.Dict[ast.Node, typesys.Type] = {}
+        self.is_constructor = False
 
     @classmethod
     def get_expr_types(
@@ -230,7 +231,11 @@ class MethodExprTypeVisitor(ScopeVisitor):
             actual_name = self.declare_name(
                 param.name.value, location=param.location
             )
-            self.parameters[actual_name] = _Local(actual_name=actual_name, type=ty)
+            self.parameters[actual_name] = _Local(
+                actual_name=actual_name, type=ty
+            )
+
+        self.is_constructor = node.name.value == self.class_.id.name
 
         super().visit_Method(node)
 
@@ -253,10 +258,16 @@ class MethodExprTypeVisitor(ScopeVisitor):
             assert class_info is not None, "Accessing property of primitive"
             if node.target.name not in class_info.attributes:
                 raise JoeTypeError(node.target.location, "No such attribute")
-            if isinstance(
-                class_info.attributes[node.target.name], objects.Method
-            ):
+            attr = class_info.attributes[node.target.name]
+            if isinstance(attr, objects.Method):
                 raise JoeTypeError(node.target.location, "Assignment to method")
+            else:
+                assert isinstance(attr, objects.Field)
+                # FIXME: handle `this.final_field = whatever` in constructor
+                if attr.final:
+                    raise JoeTypeError(
+                        node.target.location, "Assignment to final field"
+                    )
         elif isinstance(node.target, ast.IdentExpr):
             try:
                 self.resolve_local(
@@ -265,12 +276,17 @@ class MethodExprTypeVisitor(ScopeVisitor):
             except JoeNameError:
                 if node.target.name not in self.class_.attributes:
                     raise
-                if isinstance(
-                    self.class_.attributes[node.target.name], objects.Method
-                ):
+                attr = self.class_.attributes[node.target.name]
+                if isinstance(attr, objects.Method):
                     raise JoeTypeError(
                         node.target.location, "Assignment to method"
                     )
+                else:
+                    assert isinstance(attr, objects.Field)
+                    if attr.final and not self.is_constructor:
+                        raise JoeTypeError(
+                            node.target.location, "Assignment to final field"
+                        )
         elif isinstance(node.target, ast.IndexExpr):
             target_ty = self.get_type(node.target.target)
             if (

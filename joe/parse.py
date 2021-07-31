@@ -149,10 +149,10 @@ class Parser:
 
             tok = self.tokens.next()
             if tok.type == TokenType.SemiColon:
-                if final:
-                    warn("final keyword is ignored for fields")
                 fields.append(
-                    ast.Field(name=name, type=return_type, location=loc)
+                    ast.Field(
+                        name=name, type=return_type, location=loc, final=final
+                    )
                 )
                 continue
 

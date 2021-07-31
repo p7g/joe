@@ -38,6 +38,7 @@ class ArrayType(Type):
 class Field(Node):
     name: Name
     type: Type
+    final: bool
 
 
 @dataclass(eq=False)

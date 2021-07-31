@@ -145,12 +145,26 @@ def get_object_data(
     return get_struct_field(obj, "data")
 
 
+def object_data_needs_allocation(ci: objects.ClassInfo) -> bool:
+    return not (ci.field_count == 1 and next(ci.fields())[1].final)
+
+
 def get_class_field(
     ctx: TypeContext,
     obj: cnodes.CAssignmentTarget,
     obj_ty: typesys.Instance,
     name: str,
 ) -> cnodes.CAssignmentTarget:
+    ci = get_obj_class_info(ctx, obj_ty)
+    if ci.field_count == 1:
+        expected_name, only_field = next(ci.fields())
+        assert name == expected_name
+        data = get_object_data(ctx, obj, obj_ty)
+        if only_field.final:
+            return data
+        else:
+            return cnodes.CArrayIndex(data, cnodes.CInteger(0))
+
     # like: obj.data->field_name
     return get_struct_field(
         get_object_data(ctx, obj, obj_ty), name, pointer=True
@@ -278,12 +292,15 @@ class CompileVisitor(Visitor):
         obj_ty = typesys.Instance(class_ty, [])
 
         data_ctype = self._make_data_type(class_info)
+        data_name = get_class_data_name(self.type_ctx, obj_ty)
+        self.ctx.code_unit.typedefs.append(
+            cnodes.CTypeDef(data_name, data_ctype)
+        )
+        data_ctype = cnodes.CNamedType(data_name)
         class_type_name = get_type_name(self.type_ctx, obj_ty)
 
         if class_info.final:
-            class_ctype = cnodes.CTypeDef(
-                class_type_name, data_ctype.as_pointer()
-            )
+            class_ctype = cnodes.CTypeDef(class_type_name, data_ctype)
         else:
             vtable_ctype = self._make_vtable_type(class_info)
             self.ctx.code_unit.variables.append(
@@ -313,7 +330,7 @@ class CompileVisitor(Visitor):
                 fields=[
                     cnodes.CStructField(
                         name="data",
-                        type=data_ctype.as_pointer(),
+                        type=data_ctype,
                     ),
                     cnodes.CStructField(
                         name="vtable",
@@ -326,7 +343,7 @@ class CompileVisitor(Visitor):
 
             class_ctype = cnodes.CTypeDef(class_type_name, class_struct.type)
 
-        self.ctx.code_unit.classes.append(class_ctype)
+        self.ctx.code_unit.typedefs.append(class_ctype)
 
         # Visit methods
         super().visit_ClassDeclaration(node)
@@ -334,6 +351,17 @@ class CompileVisitor(Visitor):
         self.class_stack.pop()
 
     def _make_data_type(self, ci: objects.ClassInfo) -> cnodes.CType:
+        if ci.field_count == 1:
+            _name, field = next(ci.fields())
+            field_type = get_ctype(self.type_ctx, next(ci.fields())[1].type)
+            # If a field is final it can't be reassigned, so there's no need to
+            # put it behind a pointer.
+            if field.final:
+                # TODO: if the type of the field is larger than a pointer it should
+                # probably still be a pointer to that type
+                return field_type
+            return field_type.as_pointer()
+
         data_ctype = cnodes.CStruct(
             name=get_class_data_name(
                 self.type_ctx, typesys.Instance(ci.type, [])
@@ -352,7 +380,7 @@ class CompileVisitor(Visitor):
 
         self.ctx.code_unit.structs.append(data_ctype)
 
-        return data_ctype.type
+        return data_ctype.type.as_pointer()
 
     def _make_vtable_type(self, ci: objects.ClassInfo) -> cnodes.CType:
         vtable_ctype = cnodes.CStruct(
@@ -452,10 +480,19 @@ class MethodCompiler(ScopeVisitor):
         self.expr_types = self.method_type_visitor.expr_types
         self.last_expr: Option[cnodes.CExpr] = None_()
         self.receiver: Option[cnodes.CExpr] = None_()
+        self.is_constructor = meth_node.name.value == class_ty.id.name
 
     @property
     def type_ctx(self) -> TypeContext:
         return self.ctx.global_ctx.type_ctx
+
+    def get_self(self) -> cnodes.CAssignmentTarget:
+        slf = get_self()
+        if self.is_constructor and not object_data_needs_allocation(
+            self.class_ty
+        ):
+            return cnodes.CArrayIndex(slf, cnodes.CInteger(0))
+        return slf
 
     def get_node_type(self, node: ast.Node) -> typesys.Type:
         return self.expr_types[node]
@@ -519,14 +556,15 @@ class MethodCompiler(ScopeVisitor):
         )
 
         if not node.static:
+            self_type: cnodes.CType = get_ctype(
+                self.type_ctx, typesys.Instance(self.class_ty.type, [])
+            )
+            if self.is_constructor and not object_data_needs_allocation(
+                self.class_ty
+            ):
+                self_type = self_type.as_pointer()
             func.parameters.insert(
-                0,
-                cnodes.CParam(
-                    name="self",
-                    type=get_ctype(
-                        self.type_ctx, typesys.Instance(self.class_ty.type, [])
-                    ),
-                ),
+                0, cnodes.CParam(name="self", type=self_type)
             )
 
         self.cfunction.replace(func)
@@ -547,6 +585,10 @@ class MethodCompiler(ScopeVisitor):
         assert isinstance(obj, cnodes.CAssignmentTarget)
         ty = self.get_node_type(node.expr)
         assert isinstance(ty, typesys.Instance)
+        ci = get_obj_class_info(self.type_ctx, ty)
+        if not object_data_needs_allocation(ci):
+            # No extra allocation for the data
+            return
         self.cfunction.unwrap().body.append(
             make_free(get_object_data(self.type_ctx, obj, ty))
         )
@@ -590,9 +632,9 @@ class MethodCompiler(ScopeVisitor):
                 )
             else:
                 expr = get_class_method(
-                    self.type_ctx, get_self(), ty, node.name
+                    self.type_ctx, self.get_self(), ty, node.name
                 )
-                self.receiver.replace(get_self())
+                self.receiver.replace(self.get_self())
         else:
             local_name = self.method_type_visitor.try_resolve_name(node.name)
             if local_name is not None and get_local_name(local_name) in (
@@ -617,7 +659,7 @@ class MethodCompiler(ScopeVisitor):
                 # It's accessing a field on self.
                 expr = get_class_field(
                     self.type_ctx,
-                    get_self(),
+                    self.get_self(),
                     typesys.Instance(self.class_ty.type, []),
                     node.name,
                 )
@@ -730,20 +772,20 @@ class MethodCompiler(ScopeVisitor):
         class_info = self.type_ctx.get_class_info(obj_ty.type_constructor)
         assert class_info is not None
 
-        if class_info.final:
-            dest = obj_var
-        else:
-            dest = get_struct_field(obj_var, "data")
-
-        create_data = make_assign_stmt(
-            dest,
-            make_malloc(
-                cnodes.CStructType(get_class_data_name(self.type_ctx, obj_ty))
-            ),
-        )
-
         cfunc = self.cfunction.unwrap()
-        cfunc.body.append(create_data)
+        dest = get_object_data(self.type_ctx, obj_var, obj_ty)
+
+        if object_data_needs_allocation(class_info):
+            create_data = make_assign_stmt(
+                dest,
+                make_malloc(
+                    cnodes.CNamedType(
+                        get_class_data_name(self.type_ctx, obj_ty)
+                    )
+                ),
+            )
+
+            cfunc.body.append(create_data)
 
         if not class_info.final:
             create_vtable = make_assign_stmt(
@@ -760,7 +802,13 @@ class MethodCompiler(ScopeVisitor):
         constructor = class_info.attributes.get(unqualified_name)
         assert constructor is None or isinstance(constructor, objects.Method)
         if constructor is not None:
-            constructor_args: t.List[cnodes.CExpr] = [obj_var]
+            constructor_args: t.List[cnodes.CExpr] = []
+            if not object_data_needs_allocation(class_info):
+                # Need a reference to actually change the value since it's not
+                # heap-allocated.
+                constructor_args.append(cnodes.CRef(obj_var))
+            else:
+                constructor_args.append(obj_var)
             for arg in node.arguments:
                 self.visit_Expr(arg)
                 constructor_args.append(self.last_expr.take().unwrap())
