@@ -148,3 +148,10 @@ class DeleteStmt(Stmt):
 @dataclass(eq=False)
 class ExprStmt(Stmt):
     expr: Expr
+
+
+@dataclass(eq=False)
+class VarDeclaration(Stmt):
+    name: Name
+    type: Type
+    initializer: t.Optional["Expr"];

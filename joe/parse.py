@@ -202,9 +202,29 @@ class Parser:
             self.tokens.next().expect(TokenType.SemiColon)
             return ast.DeleteStmt(location=tok.location, expr=expr)
         else:
+            return self._parse_var_decl_or_expr_stmt()
+
+    def _parse_var_decl_or_expr_stmt(self) -> ast.Stmt:
+        snapshot = self._take_snapshot()
+        try:
             expr = self._parse_expr()
             self.tokens.next().expect(TokenType.SemiColon)
             return ast.ExprStmt(location=expr.location, expr=expr)
+        except JoeSyntaxError:
+            self._apply_snapshot(snapshot)
+            ty = self._parse_type()
+            name_tok = self.tokens.next().expect(TokenType.Ident)
+            init = None
+            if self.tokens.peek().type == TokenType.Eq:
+                self.tokens.next()
+                init = self._parse_expr()
+            self.tokens.next().expect(TokenType.SemiColon)
+            return ast.VarDeclaration(
+                location=ty.location,
+                name=ast.Name(name_tok.location, name_tok.value),
+                type=ty,
+                initializer=init,
+            )
 
     def _parse_expr(self) -> ast.Expr:
         left = self._parse_atom()

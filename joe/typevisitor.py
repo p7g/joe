@@ -5,6 +5,7 @@ from joe import ast, objects, typesys
 from joe.context import TypeContext
 from joe.source import JoeNameError, JoeSyntaxError, JoeTypeError, Location
 from joe.visitor import Visitor
+from joe.scopevisitor import ScopeVisitor
 
 
 class TypeVisitor(Visitor):
@@ -149,7 +150,7 @@ class Arrays:
 
 @dataclass
 class _Local:
-    name: str
+    actual_name: str
     type: typesys.Type
 
 
@@ -158,22 +159,19 @@ class _Local:
 
 # The class's type should already exist in GlobalContext. This means that the
 # types of all methods and members should already be analyzed.
-class MethodExprTypeVisitor(Visitor):
+class MethodExprTypeVisitor(ScopeVisitor):
     def __init__(
         self,
         type_ctx: TypeContext,
         class_: objects.ClassInfo,
         method: objects.Method,
-        method_node: ast.Method,
     ):
+        super().__init__()
         self.type_ctx = type_ctx
         self.class_ = class_
         self.method = method
-        self.locals: t.List[_Local] = [
-            _Local(name=param.name.value, type=ty)
-            for param, ty in zip(method_node.parameters, method.parameter_types)
-        ]
-        self.scope_start: t.List[int] = [0]
+        self.parameters: t.Dict[str, _Local] = {}
+        self.locals: t.Dict[str, _Local] = {}
         self.expr_types: t.Dict[ast.Node, typesys.Type] = {}
 
     @classmethod
@@ -184,22 +182,16 @@ class MethodExprTypeVisitor(Visitor):
         method: objects.Method,
         method_node: ast.Method,
     ) -> t.Dict[ast.Node, typesys.Type]:
-        vis = cls(type_ctx, class_, method, method_node)
+        vis = cls(type_ctx, class_, method)
         vis.visit(method_node)
         return vis.expr_types
 
     def declare_local(
         self, name: str, type_: typesys.Type, *, location: Location
     ) -> _Local:
-        for i, loc in reversed(list(enumerate(self.locals))):
-            if i < self.scope_start[-1]:
-                break
-            if loc.name == name:
-                raise JoeSyntaxError(
-                    location, f"Duplicate variable declaration {name}"
-                )
-        loc = _Local(name=name, type=type_)
-        self.locals.append(loc)
+        escaped_name = self.declare_name(name, location=location)
+        loc = _Local(actual_name=escaped_name, type=type_)
+        self.locals[escaped_name] = loc
         return loc
 
     def set_type(self, node: ast.Node, type_: typesys.Type) -> None:
@@ -209,17 +201,11 @@ class MethodExprTypeVisitor(Visitor):
         ty = self.expr_types[node]
         return ty
 
-    def resolve_local(self, name: str) -> t.Optional[_Local]:
-        for loc in reversed(self.locals):
-            if loc.name == name:
-                return loc
-        return None
-
-    @contextmanager  # type: ignore
-    def scope(self) -> t.Iterator[None]:
-        self.scope_start.append(len(self.locals))
-        yield
-        self.locals = self.locals[: self.scope_start.pop()]
+    def resolve_local(self, name: str, *, location: Location) -> _Local:
+        actual_name = self.resolve_name(name, location=location)
+        if actual_name in self.locals:
+            return self.locals[actual_name]
+        return self.parameters[actual_name]
 
     def lookup_class(self, name: str) -> t.Optional[objects.ClassInfo]:
         ty = self.type_ctx.get_type_constructor(name)
@@ -232,6 +218,17 @@ class MethodExprTypeVisitor(Visitor):
 
     def analyze_type(self, node: ast.Type) -> typesys.Type:
         return TypeVisitor.analyze(self.type_ctx, node)
+
+    def visit_Method(self, node: ast.Method):
+        self.clear_names()
+
+        for param, ty in zip(node.parameters, self.method.parameter_types):
+            actual_name = self.declare_name(
+                param.name.value, location=param.location
+            )
+            self.parameters[actual_name] = _Local(actual_name=actual_name, type=ty)
+
+        super().visit_Method(node)
 
     def visit_AssignExpr(self, node: ast.AssignExpr):
         super().visit_AssignExpr(node)
@@ -257,12 +254,13 @@ class MethodExprTypeVisitor(Visitor):
             ):
                 raise JoeTypeError(node.target.location, "Assignment to method")
         elif isinstance(node.target, ast.IdentExpr):
-            local = self.resolve_local(node.target.name)
-            if local is None:
+            try:
+                self.resolve_local(
+                    node.target.name, location=node.target.location
+                )
+            except JoeNameError:
                 if node.target.name not in self.class_.attributes:
-                    raise JoeTypeError(
-                        node.target.location, "No such attribute"
-                    )
+                    raise
                 if isinstance(
                     self.class_.attributes[node.target.name], objects.Method
                 ):
@@ -314,18 +312,14 @@ class MethodExprTypeVisitor(Visitor):
 
     def visit_IdentExpr(self, node: ast.IdentExpr):
         name_str = node.name
-        loc = self.resolve_local(name_str)
-        ty: t.Optional[typesys.Type] = None
-        if loc is not None:
+        try:
+            loc = self.resolve_local(name_str, location=node.location)
             ty = loc.type
-        else:
+        except JoeNameError:
             attr = self.class_.attributes.get(name_str)
-            if attr is not None:
-                ty = attr.type
-        if ty is None:
-            raise JoeNameError(
-                node.location, f"Failed to resolve variable {name_str}"
-            )
+            if attr is None:
+                raise
+            ty = attr.type
         self.set_type(node, ty)
 
     def visit_DotExpr(self, node: ast.DotExpr):
@@ -438,7 +432,9 @@ class MethodExprTypeVisitor(Visitor):
         )
         if target_ty.type_constructor != Arrays.get_type_constructor():
             raise JoeTypeError(node.target.location, "Can only index arrays")
-        if index_ty.type_constructor != self.type_ctx.get_type_constructor("int"):
+        if index_ty.type_constructor != self.type_ctx.get_type_constructor(
+            "int"
+        ):
             raise JoeTypeError(
                 node.index.location, "Can only index arrays by integers"
             )
@@ -465,4 +461,14 @@ class MethodExprTypeVisitor(Visitor):
         tycon = expr_ty.type_constructor
         class_info = self.type_ctx.get_class_info(tycon)
         if class_info is None:
-            raise JoeTypeError(node.expr.location, "Can't delete primitive value")
+            raise JoeTypeError(
+                node.expr.location, "Can't delete primitive value"
+            )
+
+    def visit_VarDeclaration(self, node: ast.VarDeclaration):
+        super().visit_VarDeclaration(node)
+
+        actual_name = self.resolve_name(node.name.value, location=node.location)
+        self.locals[actual_name] = _Local(
+            actual_name=actual_name, type=self.analyze_type(node.type)
+        )

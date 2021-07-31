@@ -138,6 +138,8 @@ class Visitor:
             self.visit_DeleteStmt(node)
         elif isinstance(node, ast.ExprStmt):
             self.visit_ExprStmt(node)
+        elif isinstance(node, ast.VarDeclaration):
+            self.visit_VarDeclaration(node)
         else:
             raise NotImplementedError(node)
 
@@ -150,6 +152,12 @@ class Visitor:
 
     def visit_ExprStmt(self, node: ast.ExprStmt):
         self.visit_Expr(node.expr)
+
+    def visit_VarDeclaration(self, node: ast.VarDeclaration):
+        self.visit_Type(node.type)
+        self.visit_Name(node.name)
+        if node.initializer:
+            self.visit_Expr(node.initializer)
 
 
 def _validate_visitor_methods():

@@ -6,6 +6,7 @@ from joe import ast, cnodes, mangle, objects, typesys
 from joe.context import GlobalContext, TypeContext
 from joe.exc import JoeUnreachable
 from joe.parse import ModulePath
+from joe.scopevisitor import ScopeVisitor
 from joe.typevisitor import Arrays, MethodExprTypeVisitor
 from joe.visitor import Visitor
 
@@ -120,7 +121,7 @@ def get_self_vtable_member(name: str) -> cnodes.CAssignmentTarget:
 
 
 def get_local_name(name: str) -> str:
-    return f"__joe_local_{name}"
+    return f"__joe_{name}"
 
 
 def is_array_type(ty: typesys.Type) -> TypeGuard[typesys.Instance]:
@@ -247,12 +248,12 @@ class CompileVisitor(Visitor):
         for name, attr in class_info.attributes.items():
             if isinstance(attr, objects.Field):
                 field = attr
-                if is_array_type(attr.type):
-                    emit_array(self.ctx, attr.type)
+                if is_array_type(field.type):
+                    emit_array(self.ctx, field.type)
                 data_ctype.fields.append(
                     cnodes.CStructField(
                         name=name,
-                        type=get_ctype(self.type_ctx, attr.type),
+                        type=get_ctype(self.type_ctx, field.type),
                     )
                 )
 
@@ -371,7 +372,7 @@ class CompileVisitor(Visitor):
         self.ctx.code_unit.functions.append(main_func)
 
 
-class MethodCompiler(Visitor):
+class MethodCompiler(ScopeVisitor):
     def __init__(
         self,
         ctx: CompileContext,
@@ -379,19 +380,17 @@ class MethodCompiler(Visitor):
         meth_ty: objects.Method,
         meth_node: ast.Method,
     ) -> None:
+        super().__init__()
         self.ctx = ctx
         self.class_ty = class_ty
         self.meth_ty = meth_ty
         self.meth_node = meth_node
         self.cfunction: Option[cnodes.CFunc] = None_()
-        vis = MethodExprTypeVisitor(
-            ctx.global_ctx.type_ctx,
-            class_ty,
-            meth_ty,
-            meth_node,
+        self.method_type_visitor = MethodExprTypeVisitor(
+            ctx.global_ctx.type_ctx, class_ty, meth_ty
         )
-        vis.visit(meth_node)
-        self.expr_types: t.Dict[ast.Node, typesys.Type] = vis.expr_types
+        self.method_type_visitor.visit(meth_node)
+        self.expr_types = self.method_type_visitor.expr_types
         self.last_expr: Option[cnodes.CExpr] = None_()
         self.receiver: Option[cnodes.CExpr] = None_()
 
@@ -404,7 +403,7 @@ class MethodCompiler(Visitor):
 
     def new_variable(self, type_: typesys.Type) -> cnodes.CAssignmentTarget:
         locs = self.cfunction.unwrap().locals
-        new_loc_name = get_local_name(str(len(locs)))
+        new_loc_name = get_local_name(f"tmp_{len(locs)}")
         locs.append(
             cnodes.CVarDecl(
                 name=new_loc_name, type=get_ctype(self.type_ctx, type_)
@@ -434,14 +433,23 @@ class MethodCompiler(Visitor):
             return_type=get_ctype(self.type_ctx, self.meth_ty.return_type),
             parameters=[
                 cnodes.CParam(
-                    name=get_local_name(param.name.value),
+                    name=get_local_name(
+                        # FIXME
+                        self.method_type_visitor._names[0, param.name.value]
+                    ),
                     type=get_ctype(self.type_ctx, ty),
                 )
                 for param, ty in zip(
                     node.parameters, self.meth_ty.parameter_types
                 )
             ],
-            locals=[],
+            locals=[
+                cnodes.CVarDecl(
+                    name=get_local_name(l.actual_name),
+                    type=get_ctype(self.type_ctx, l.type),
+                )
+                for l in self.method_type_visitor.locals.values()
+            ],
             body=[],
         )
 
@@ -480,6 +488,20 @@ class MethodCompiler(Visitor):
         expr = None if ret_expr.is_none() else ret_expr.unwrap()
         self.cfunction.unwrap().body.append(cnodes.CReturnStmt(expr))
 
+    def visit_VarDeclaration(self, node: ast.VarDeclaration) -> None:
+        super().visit_VarDeclaration(node)
+
+        if node.initializer is None:
+            return
+
+        dest_name = self.resolve_name(node.name.value, location=node.location)
+        value = self.last_expr.take().unwrap()
+
+        assign_stmt = make_assign_stmt(
+            cnodes.CVariable(get_local_name(dest_name)), value
+        )
+        self.cfunction.unwrap().body.append(assign_stmt)
+
     def visit_IdentExpr(self, node: ast.IdentExpr) -> None:
         ty = self.get_node_type(node)
         expr: cnodes.CExpr
@@ -498,20 +520,31 @@ class MethodCompiler(Visitor):
             else:
                 expr = get_self_vtable_member(node.name)
                 self.receiver.replace(get_self())
-        elif node.name in (
-            l.name for l in self.cfunction.unwrap().locals
-        ) or node.name in (p.name.value for p in self.meth_node.parameters):
-            # It's a local variable. Scopes should already be flattened, so
-            # variables are function-scoped.
-            expr = cnodes.CVariable(get_local_name(node.name))
-        elif node.name in self.class_ty.attributes:
-            assert isinstance(
-                self.class_ty.attributes[node.name], objects.Field
-            )
-            # It's accessing a field on self.
-            expr = get_self_data_member(node.name)
         else:
-            raise JoeUnreachable()
+            local_name = self.method_type_visitor.try_resolve_name(node.name)
+            if local_name is not None and get_local_name(local_name) in (
+                l.name for l in self.cfunction.unwrap().locals
+            ):
+                # It's a local variable. Scopes should already be flattened, so
+                # variables are function-scoped.
+                expr = cnodes.CVariable(get_local_name(local_name))
+            elif node.name in (p.name.value for p in self.meth_node.parameters):
+                expr = cnodes.CVariable(
+                    get_local_name(
+                        self.method_type_visitor.resolve_name(
+                            node.name,
+                            location=node.location,
+                        )
+                    )
+                )
+            elif node.name in self.class_ty.attributes:
+                assert isinstance(
+                    self.class_ty.attributes[node.name], objects.Field
+                )
+                # It's accessing a field on self.
+                expr = get_self_data_member(node.name)
+            else:
+                raise JoeUnreachable()
         self.last_expr.replace(expr)
 
     def visit_IntExpr(self, node: ast.IntExpr) -> None:
