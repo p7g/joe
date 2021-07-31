@@ -1,4 +1,4 @@
-class simple {
+final class simple {
     int _n;
 
     void simple(int n) {

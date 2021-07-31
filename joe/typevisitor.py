@@ -53,6 +53,7 @@ class ClassDeclarationVisitor(Visitor):
                 parameters=[], super_=typesys.TopType()
             ),
             attributes={},
+            final=False,
         )
         self.type_ctx = type_ctx
 
@@ -70,11 +71,12 @@ class ClassDeclarationVisitor(Visitor):
         return TypeVisitor.analyze(self.type_ctx, node)
 
     def visit_ClassDeclaration(self, node: ast.ClassDeclaration):
-        # TODO: inheritance
+        # TODO: inheritance (don't forget to check if super is final)
         # if node.extends:
         #     self.superclass = self.analyze_type(node.extends)
         # Add current class to scope after resolving superclass (avoid cycle)
         self.type_ctx.add_class(self.ty)
+        self.ty.final = node.final
         super().visit_ClassDeclaration(node)
 
     def visit_Field(self, node: ast.Field):
@@ -97,6 +99,7 @@ class ClassDeclarationVisitor(Visitor):
             raise JoeSyntaxError(
                 node.location, "Constructor must have void return type"
             )
+        # TODO: Ensure that this doesn't override a final method
         meth_ty = typesys.Instance(
             function_type(len(node.parameters)),
             [self.analyze_type(p.type) for p in node.parameters]
@@ -105,6 +108,7 @@ class ClassDeclarationVisitor(Visitor):
         self.ty.attributes[node.name.value] = objects.Method(
             meth_ty,
             static=node.static,
+            final=node.final,
         )
 
 

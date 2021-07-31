@@ -14,10 +14,12 @@ class ClassInfo:
         id_: ClassID,
         type_: typesys.TypeConstructor,
         attributes: dict[str, Attribute],
+        final: bool,
     ) -> None:
         self.id = id_
         self.type = type_
         self.attributes = attributes
+        self.final = final
 
 
 class Attribute:
@@ -28,9 +30,10 @@ class Attribute:
 
 
 class Method(Attribute):
-    def __init__(self, type_: typesys.Type, static: bool) -> None:
+    def __init__(self, type_: typesys.Type, static: bool, final: bool) -> None:
         super().__init__(type_)
         self.static = static
+        self.final = final
 
     def _ensure_valid_function_type(self) -> typesys.Instance:
         assert (

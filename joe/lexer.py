@@ -12,6 +12,7 @@ class TokenType(enum.IntEnum):
     Delete = enum.auto()
     Do = enum.auto()
     Extends = enum.auto()
+    Final = enum.auto()
     For = enum.auto()
     Free = enum.auto()
     If = enum.auto()
@@ -76,6 +77,7 @@ _keywords = {
     "delete": TokenType.Delete,
     "do": TokenType.Do,
     "extends": TokenType.Extends,
+    "final": TokenType.Final,
     "for": TokenType.For,
     "free": TokenType.Free,
     "if": TokenType.If,

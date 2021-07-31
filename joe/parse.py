@@ -6,7 +6,7 @@ from patina import Option, None_
 from joe import ast
 from joe.lexer import Token, TokenType, lex
 from joe.source import Location, JoeSyntaxError
-from joe._utils import Peekable
+from joe._utils import Peekable, warn
 
 
 class ModulePath(t.List[str]):
@@ -56,7 +56,12 @@ class Parser:
 
     def parse_file(self) -> t.List[ast.Module]:
         imports, modules = self._parse_imports()
-        class_decl = self._parse_class_decl()
+
+        final = False
+        if self.tokens.peek().type == TokenType.Final:
+            self.tokens.next()
+            final = True
+        class_decl = self._parse_class_decl(final=final)
 
         modules.append(
             ast.Module(
@@ -98,7 +103,7 @@ class Parser:
 
         return imports, modules
 
-    def _parse_class_decl(self) -> ast.ClassDeclaration:
+    def _parse_class_decl(self, *, final: bool) -> ast.ClassDeclaration:
         class_tok = self.tokens.next().expect(TokenType.Class)
         name_tok = self.tokens.next().expect(TokenType.Ident)
 
@@ -114,6 +119,7 @@ class Parser:
             fields=fields,
             methods=methods,
             location=class_tok.location,
+            final=final,
         )
 
     def _parse_methods_and_fields(
@@ -125,12 +131,17 @@ class Parser:
         while self.tokens.peek().type != TokenType.RBrace:
             tok = self.tokens.peek()
             loc = tok.location
+
+            static = False
+            final = False
             if tok.type == TokenType.Static:
                 self.tokens.next()
                 tok = self.tokens.peek()
                 static = True
-            else:
-                static = False
+            elif tok.type == TokenType.Final:
+                self.tokens.next()
+                tok = self.tokens.peek()
+                final = True
 
             return_type = self._parse_type()
             name_tok = self.tokens.next().expect(TokenType.Ident)
@@ -138,13 +149,19 @@ class Parser:
 
             tok = self.tokens.next()
             if tok.type == TokenType.SemiColon:
+                if final:
+                    warn("final keyword is ignored for fields")
                 fields.append(
                     ast.Field(name=name, type=return_type, location=loc)
                 )
                 continue
 
             meth = ast.Method(
-                name=name, return_type=return_type, location=loc, static=static
+                name=name,
+                return_type=return_type,
+                location=loc,
+                static=static,
+                final=final,
             )
             methods.append(meth)
 

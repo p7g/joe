@@ -80,7 +80,7 @@ class CDecl(abc.ABC):
 
 
 @dataclass
-class CStruct(CDecl):
+class CStruct(CDecl, CType):
     fields: t.List[CStructField] = field(default_factory=list)
 
     def emit(self, gen: Emitter) -> None:
@@ -93,9 +93,26 @@ class CStruct(CDecl):
     def emit_forward_decl(self, gen: Emitter) -> None:
         gen.emit(f"struct {self.name};")
 
+    def render(self) -> str:
+        e = Emitter()
+        self.emit(e)
+        return e.get()
+
     @property
     def type(self) -> CStructType:
         return CStructType(name=self.name)
+
+
+@dataclass
+class CTypeDef(CDecl):
+    aliased_type: CType
+
+    def emit(self, gen: Emitter) -> None:
+        pass
+
+    def emit_forward_decl(self, gen: Emitter) -> None:
+        ty = self.aliased_type.render_named(self.name)
+        gen.emit(f"typedef {ty};")
 
 
 @dataclass
@@ -135,8 +152,8 @@ class CFunc(CDecl):
 @dataclass
 class CClassDecl:
     data_type: CStruct
-    vtable_type: CStruct
-    class_type: CStruct
+    vtable_type: t.Optional[CStruct]
+    class_type: CDecl
 
 
 @dataclass
@@ -157,7 +174,8 @@ class CCodeUnit:
         for class_ in self.classes:
             class_.class_type.emit(gen)
             class_.data_type.emit(gen)
-            class_.vtable_type.emit(gen)
+            if class_.vtable_type is not None:
+                class_.vtable_type.emit(gen)
         for func in self.functions:
             func.emit_forward_decl(gen)
         for var in self.variables:

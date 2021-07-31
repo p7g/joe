@@ -53,6 +53,7 @@ class Method(Node):
     parameters: t.List[Parameter] = field(default_factory=list)
     body: t.List["Stmt"] = field(default_factory=list)
     static: bool = False
+    final: bool = False
 
 
 @dataclass(eq=False)
@@ -60,6 +61,7 @@ class ClassDeclaration(Node):
     name: Name
     fields: t.List[Field] = field(default_factory=list)
     methods: t.List[Method] = field(default_factory=list)
+    final: bool = False
 
 
 @dataclass(eq=False)

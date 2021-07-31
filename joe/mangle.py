@@ -3,6 +3,7 @@ import typing as t
 _primitive_names = {
     "int": "i",
     "double": "d",
+    "void": "v",
 }
 
 

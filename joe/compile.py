@@ -15,16 +15,24 @@ def prefix_ident(name: str) -> str:
     return f"__joe_{name}"
 
 
-def _get_type_name(ctx: TypeContext, ty: typesys.Type) -> str:
+def ensure_instance(ty: typesys.Type) -> typesys.Instance:
     assert isinstance(ty, typesys.Instance)
-    class_info = ctx.get_class_info(ty.type_constructor)
-    if class_info is None:
-        path = ctx.get_primitive_name(ty.type_constructor)
+    return ty
+
+
+def _get_type_name(ctx: TypeContext, ty: typesys.Type) -> str:
+    if isinstance(ty, typesys.BottomType):
+        path = "void"
+        arguments = []
     else:
-        path = class_info.id.name
-    return mangle.mangle_name(
-        path, [_get_type_name(ctx, arg) for arg in ty.arguments]
-    )
+        assert isinstance(ty, typesys.Instance)
+        class_info = ctx.get_class_info(ty.type_constructor)
+        if class_info is None:
+            path = ctx.get_primitive_name(ty.type_constructor)
+        else:
+            path = class_info.id.name
+        arguments = [_get_type_name(ctx, arg) for arg in ty.arguments]
+    return mangle.mangle_name(path, arguments)
 
 
 def get_type_name(ctx: TypeContext, ty: typesys.Instance) -> str:
@@ -78,7 +86,7 @@ def get_ctype(ctx: TypeContext, typ: typesys.Type) -> cnodes.CType:
         isinstance(typ, typesys.Instance)
         and not typ.type_constructor.is_function
     ):
-        return cnodes.CStructType(get_type_name(ctx, typ))
+        return cnodes.CNamedType(get_type_name(ctx, typ))
     elif isinstance(typ, typesys.Instance) and typ.type_constructor.is_function:
         return cnodes.CFuncType(
             return_type=get_ctype(ctx, typ.arguments[-1]),
@@ -88,7 +96,26 @@ def get_ctype(ctx: TypeContext, typ: typesys.Type) -> cnodes.CType:
         raise NotImplementedError(typ)
 
 
-def get_self() -> cnodes.CExpr:
+def get_class_method(
+    ctx: TypeContext, obj: cnodes.CExpr, obj_ty: typesys.Instance, name: str
+) -> cnodes.CExpr:
+    tycon = obj_ty.type_constructor
+    ci = ctx.get_class_info(tycon)
+    assert ci is not None
+
+    meth = ci.attributes[name]
+    assert isinstance(meth, objects.Method)
+
+    if meth.final or ci.final:
+        assert isinstance(meth.type, typesys.Instance)
+        return cnodes.CVariable(
+            get_class_method_impl_name(ctx, obj_ty, name, meth.type)
+        )
+    else:
+        return get_vtable_member(obj, name)
+
+
+def get_self() -> cnodes.CVariable:
     return cnodes.CVariable("self")
 
 
@@ -102,9 +129,24 @@ def get_member(
     )
 
 
-def get_data_member(obj: cnodes.CExpr, name: str) -> cnodes.CAssignmentTarget:
+def get_object_data(
+    ctx: TypeContext, obj: cnodes.CAssignmentTarget, obj_ty: typesys.Instance
+) -> cnodes.CAssignmentTarget:
+    ci = ctx.get_class_info(obj_ty.type_constructor)
+    assert ci is not None
+    if ci.final:
+        return obj
+    return get_member(obj, "data")
+
+
+def get_data_member(
+    ctx: TypeContext,
+    obj: cnodes.CAssignmentTarget,
+    obj_ty: typesys.Instance,
+    name: str,
+) -> cnodes.CAssignmentTarget:
     # like: obj.data->field_name
-    return get_member(get_member(obj, "data"), name, pointer=True)
+    return get_member(get_object_data(ctx, obj, obj_ty), name, pointer=True)
 
 
 def get_vtable_member(obj: cnodes.CExpr, name: str) -> cnodes.CAssignmentTarget:
@@ -112,8 +154,10 @@ def get_vtable_member(obj: cnodes.CExpr, name: str) -> cnodes.CAssignmentTarget:
     return get_member(get_member(obj, "vtable"), name, pointer=True)
 
 
-def get_self_data_member(name: str) -> cnodes.CAssignmentTarget:
-    return get_data_member(get_self(), name)
+def get_self_data_member(
+    ctx: TypeContext, obj_ty: typesys.Instance, name: str
+) -> cnodes.CAssignmentTarget:
+    return get_data_member(ctx, get_self(), obj_ty, name)
 
 
 def get_self_vtable_member(name: str) -> cnodes.CAssignmentTarget:
@@ -257,7 +301,7 @@ class CompileVisitor(Visitor):
                     )
                 )
 
-            elif isinstance(attr, objects.Method):
+            elif isinstance(attr, objects.Method) and not attr.final:
                 method = attr
                 if is_array_type(method.return_type):
                     emit_array(self.ctx, method.return_type)
@@ -278,24 +322,35 @@ class CompileVisitor(Visitor):
                         cnodes.CStructField(name=name, type=meth_cty)
                     )
 
-        class_ctype = cnodes.CStruct(
-            name=get_type_name(self.type_ctx, typesys.Instance(class_ty, [])),
-            fields=[
-                cnodes.CStructField(
-                    name="data",
-                    type=data_ctype.type.as_pointer(),
-                ),
-                cnodes.CStructField(
-                    name="vtable",
-                    type=vtable_ctype.type.as_pointer(),
-                ),
-            ],
+        class_type_name = get_type_name(
+            self.type_ctx, typesys.Instance(class_ty, [])
         )
+        if class_info.final:
+            class_ctype: cnodes.CDecl = cnodes.CTypeDef(
+                class_type_name, data_ctype.type.as_pointer()
+            )
+        else:
+            class_ctype = cnodes.CTypeDef(
+                class_type_name,
+                cnodes.CStruct(
+                    name=class_type_name,
+                    fields=[
+                        cnodes.CStructField(
+                            name="data",
+                            type=data_ctype.type.as_pointer(),
+                        ),
+                        cnodes.CStructField(
+                            name="vtable",
+                            type=vtable_ctype.type.as_pointer(),
+                        ),
+                    ],
+                ),
+            )
 
         self.ctx.code_unit.classes.append(
             cnodes.CClassDecl(
                 data_type=data_ctype,
-                vtable_type=vtable_ctype,
+                vtable_type=None if class_info.final else vtable_ctype,
                 class_type=class_ctype,
             )
         )
@@ -303,25 +358,28 @@ class CompileVisitor(Visitor):
         # Visit methods
         super().visit_ClassDeclaration(node)
 
-        self.ctx.code_unit.variables.append(
-            cnodes.CVarDecl(
-                name=vtable_ctype.name,
-                type=vtable_ctype.type,
-                value=cnodes.CArrayLiteral(
-                    [
-                        cnodes.CVariable(
-                            get_class_member_name(
-                                self.type_ctx,
-                                typesys.Instance(class_ty, []),
-                                meth_name,
+        if not class_info.final:
+            self.ctx.code_unit.variables.append(
+                cnodes.CVarDecl(
+                    name=vtable_ctype.name,
+                    type=vtable_ctype.type,
+                    value=cnodes.CArrayLiteral(
+                        [
+                            cnodes.CVariable(
+                                get_class_method_impl_name(
+                                    self.type_ctx,
+                                    typesys.Instance(class_ty, []),
+                                    meth_name,
+                                    ensure_instance(meth.type),
+                                )
                             )
-                        )
-                        for meth_name, meth in class_info.attributes.items()
-                        if isinstance(meth, objects.Method) and not meth.static
-                    ]
-                ),
+                            for meth_name, meth in class_info.attributes.items()
+                            if isinstance(meth, objects.Method)
+                            and not meth.static
+                        ]
+                    ),
+                )
             )
-        )
 
         self.class_stack.pop()
 
@@ -351,8 +409,9 @@ class CompileVisitor(Visitor):
             or meth.parameter_types
         ):
             raise Exception(f"Invalid signature for main method: {meth_name}")
-        main_name = get_class_member_name(
-            self.type_ctx, typesys.Instance(cls_ty, []), meth_name
+        assert isinstance(meth.type, typesys.Instance)
+        main_name = get_class_method_impl_name(
+            self.type_ctx, typesys.Instance(cls_ty, []), meth_name, meth.type
         )
         main_func = cnodes.CFunc(
             name="main",
@@ -424,11 +483,17 @@ class MethodCompiler(ScopeVisitor):
         self.visit(self.meth_node)
 
     def visit_Method(self, node: ast.Method) -> None:
+        func_attr = self.class_ty.attributes[node.name.value]
+        assert isinstance(func_attr, objects.Method)
+        func_ty = func_attr.type
+        assert isinstance(func_ty, typesys.Instance)
+
         func = cnodes.CFunc(
-            name=get_class_member_name(
+            name=get_class_method_impl_name(
                 self.type_ctx,
                 typesys.Instance(self.class_ty.type, []),
                 node.name.value,
+                func_ty,
             ),
             return_type=get_ctype(self.type_ctx, self.meth_ty.return_type),
             parameters=[
@@ -478,8 +543,12 @@ class MethodCompiler(ScopeVisitor):
     def visit_DeleteStmt(self, node: ast.DeleteStmt) -> None:
         super().visit_DeleteStmt(node)
         # Free the data member of the object
+        obj = self.last_expr.take().unwrap()
+        assert isinstance(obj, cnodes.CAssignmentTarget)
+        ty = self.get_node_type(node.expr)
+        assert isinstance(ty, typesys.Instance)
         self.cfunction.unwrap().body.append(
-            make_free(get_member(self.last_expr.take().unwrap(), "data"))
+            make_free(get_object_data(self.type_ctx, obj, ty))
         )
 
     def visit_ReturnStmt(self, node: ast.ReturnStmt) -> None:
@@ -510,15 +579,19 @@ class MethodCompiler(ScopeVisitor):
             func = self.class_ty.attributes[node.name]
             assert isinstance(func, objects.Method)
             if func.static:
+                assert isinstance(func.type, typesys.Instance)
                 expr = cnodes.CVariable(
-                    get_class_member_name(
+                    get_class_method_impl_name(
                         self.type_ctx,
                         typesys.Instance(self.class_ty.type, []),
                         node.name,
+                        func.type,
                     )
                 )
             else:
-                expr = get_self_vtable_member(node.name)
+                expr = get_class_method(
+                    self.type_ctx, get_self(), ty, node.name
+                )
                 self.receiver.replace(get_self())
         else:
             local_name = self.method_type_visitor.try_resolve_name(node.name)
@@ -542,7 +615,11 @@ class MethodCompiler(ScopeVisitor):
                     self.class_ty.attributes[node.name], objects.Field
                 )
                 # It's accessing a field on self.
-                expr = get_self_data_member(node.name)
+                expr = get_self_data_member(
+                    self.type_ctx,
+                    typesys.Instance(self.class_ty.type, []),
+                    node.name,
+                )
             else:
                 raise JoeUnreachable()
         self.last_expr.replace(expr)
@@ -633,9 +710,12 @@ class MethodCompiler(ScopeVisitor):
             assert class_info is not None
             mem = class_info.attributes[node.name]
             if isinstance(mem, objects.Field):
-                expr = get_data_member(left, node.name)
+                assert isinstance(left, cnodes.CAssignmentTarget)
+                expr = get_data_member(self.type_ctx, left, left_ty, node.name)
             elif isinstance(mem, objects.Method):
-                expr = get_vtable_member(left, node.name)
+                meth_ty = mem.type
+                assert isinstance(meth_ty, typesys.Instance)
+                expr = get_class_method(self.type_ctx, left, left_ty, node.name)
                 self.receiver.replace(left)
             else:
                 raise JoeUnreachable()
@@ -649,21 +729,31 @@ class MethodCompiler(ScopeVisitor):
         class_info = self.type_ctx.get_class_info(obj_ty.type_constructor)
         assert class_info is not None
 
+        if class_info.final:
+            dest = obj_var
+        else:
+            dest = get_member(obj_var, "data")
+
         create_data = make_assign_stmt(
-            get_member(obj_var, "data"),
+            dest,
             make_malloc(
                 cnodes.CStructType(get_class_data_name(self.type_ctx, obj_ty))
             ),
         )
-        create_vtable = make_assign_stmt(
-            get_member(obj_var, "vtable"),
-            cnodes.CRef(
-                cnodes.CVariable(get_class_vtable_name(self.type_ctx, obj_ty))
-            ),
-        )
 
         cfunc = self.cfunction.unwrap()
-        cfunc.body.extend([create_data, create_vtable])
+        cfunc.body.append(create_data)
+
+        if not class_info.final:
+            create_vtable = make_assign_stmt(
+                get_member(obj_var, "vtable"),
+                cnodes.CRef(
+                    cnodes.CVariable(
+                        get_class_vtable_name(self.type_ctx, obj_ty)
+                    )
+                ),
+            )
+            cfunc.body.append(create_vtable)
 
         unqualified_name = ModulePath.from_class_path(class_info.id.name)[-1]
         constructor = class_info.attributes.get(unqualified_name)
@@ -674,10 +764,14 @@ class MethodCompiler(ScopeVisitor):
                 self.visit_Expr(arg)
                 constructor_args.append(self.last_expr.take().unwrap())
 
+            target = get_class_method(
+                self.type_ctx, obj_var, obj_ty, unqualified_name
+            )
+
             # Call the constructor
             call_constructor = cnodes.CExprStmt(
                 cnodes.CCallExpr(
-                    target=get_vtable_member(obj_var, unqualified_name),
+                    target=target,
                     arguments=constructor_args,
                 ),
             )
