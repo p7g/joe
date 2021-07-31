@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import typing as t
+
 from joe import typesys
 
 
@@ -20,6 +22,20 @@ class ClassInfo:
         self.type = type_
         self.attributes = attributes
         self.final = final
+
+    @property
+    def field_count(self) -> int:
+        return len(tuple(self.fields()))
+
+    def methods(self) -> t.Generator[tuple[str, Method], None, None]:
+        for name, attr in self.attributes.items():
+            if isinstance(attr, Method):
+                yield name, attr
+
+    def fields(self) -> t.Generator[tuple[str, Field], None, None]:
+        for name, attr in self.attributes.items():
+            if isinstance(attr, Field):
+                yield name, attr
 
 
 class Attribute:

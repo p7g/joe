@@ -157,7 +157,6 @@ class CFunc(CDecl):
 
 @dataclass
 class CClassDecl:
-    data_type: CStruct
     vtable_type: t.Optional[CStruct]
     class_type: CDecl
 
@@ -165,7 +164,7 @@ class CClassDecl:
 @dataclass
 class CCodeUnit:
     includes: t.List[str] = field(default_factory=list)
-    classes: t.List[CClassDecl] = field(default_factory=list)
+    classes: t.List[CTypeDef] = field(default_factory=list)
     structs: t.List[CStruct] = field(default_factory=list)
     functions: t.List[CFunc] = field(default_factory=list)
     variables: t.List["CVarDecl"] = field(default_factory=list)
@@ -174,14 +173,11 @@ class CCodeUnit:
         for include in self.includes:
             gen.emit(f"#include <{include}>")
         for class_ in self.classes:
-            class_.class_type.emit_forward_decl(gen)
+            class_.emit_forward_decl(gen)
         for struct in self.structs:
             struct.emit(gen)
         for class_ in self.classes:
-            class_.class_type.emit(gen)
-            class_.data_type.emit(gen)
-            if class_.vtable_type is not None:
-                class_.vtable_type.emit(gen)
+            class_.emit(gen)
         for func in self.functions:
             func.emit_forward_decl(gen)
         for var in self.variables:

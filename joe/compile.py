@@ -96,7 +96,9 @@ def get_ctype(ctx: TypeContext, typ: typesys.Type) -> cnodes.CType:
         raise NotImplementedError(typ)
 
 
-def get_obj_class_info(ctx: TypeContext, obj_ty: typesys.Instance) -> objects.ClassInfo:
+def get_obj_class_info(
+    ctx: TypeContext, obj_ty: typesys.Instance
+) -> objects.ClassInfo:
     ci = ctx.get_class_info(obj_ty.type_constructor)
     assert ci is not None
     return ci
@@ -150,7 +152,9 @@ def get_class_field(
     name: str,
 ) -> cnodes.CAssignmentTarget:
     # like: obj.data->field_name
-    return get_struct_field(get_object_data(ctx, obj, obj_ty), name, pointer=True)
+    return get_struct_field(
+        get_object_data(ctx, obj, obj_ty), name, pointer=True
+    )
 
 
 def get_vtable_member(obj: cnodes.CExpr, name: str) -> cnodes.CAssignmentTarget:
@@ -271,98 +275,27 @@ class CompileVisitor(Visitor):
         class_info = self.type_ctx.get_class_info(class_ty)
         assert class_info is not None
         self.class_stack.append(class_info)
+        obj_ty = typesys.Instance(class_ty, [])
 
-        data_ctype = cnodes.CStruct(
-            name=get_class_data_name(
-                self.type_ctx, typesys.Instance(class_ty, [])
-            )
-        )
-        vtable_ctype = cnodes.CStruct(
-            name=get_class_vtable_name(
-                self.type_ctx, typesys.Instance(class_ty, [])
-            )
-        )
+        data_ctype = self._make_data_type(class_info)
+        class_type_name = get_type_name(self.type_ctx, obj_ty)
 
-        for name, attr in class_info.attributes.items():
-            if isinstance(attr, objects.Field):
-                field = attr
-                if is_array_type(field.type):
-                    emit_array(self.ctx, field.type)
-                data_ctype.fields.append(
-                    cnodes.CStructField(
-                        name=name,
-                        type=get_ctype(self.type_ctx, field.type),
-                    )
-                )
-
-            elif isinstance(attr, objects.Method) and not attr.final:
-                method = attr
-                if is_array_type(method.return_type):
-                    emit_array(self.ctx, method.return_type)
-                for param in method.parameter_types:
-                    if is_array_type(param):
-                        emit_array(self.ctx, param)
-
-                if not method.static:
-                    meth_cty = get_ctype(self.type_ctx, method.type)
-                    assert isinstance(meth_cty, cnodes.CFuncType)
-                    meth_cty.parameter_types.insert(
-                        0,
-                        get_ctype(
-                            self.type_ctx, typesys.Instance(class_ty, [])
-                        ),
-                    )
-                    vtable_ctype.fields.append(
-                        cnodes.CStructField(name=name, type=meth_cty)
-                    )
-
-        class_type_name = get_type_name(
-            self.type_ctx, typesys.Instance(class_ty, [])
-        )
         if class_info.final:
-            class_ctype: cnodes.CDecl = cnodes.CTypeDef(
-                class_type_name, data_ctype.type.as_pointer()
+            class_ctype = cnodes.CTypeDef(
+                class_type_name, data_ctype.as_pointer()
             )
         else:
-            class_ctype = cnodes.CTypeDef(
-                class_type_name,
-                cnodes.CStruct(
-                    name=class_type_name,
-                    fields=[
-                        cnodes.CStructField(
-                            name="data",
-                            type=data_ctype.type.as_pointer(),
-                        ),
-                        cnodes.CStructField(
-                            name="vtable",
-                            type=vtable_ctype.type.as_pointer(),
-                        ),
-                    ],
-                ),
-            )
-
-        self.ctx.code_unit.classes.append(
-            cnodes.CClassDecl(
-                data_type=data_ctype,
-                vtable_type=None if class_info.final else vtable_ctype,
-                class_type=class_ctype,
-            )
-        )
-
-        # Visit methods
-        super().visit_ClassDeclaration(node)
-
-        if not class_info.final:
+            vtable_ctype = self._make_vtable_type(class_info)
             self.ctx.code_unit.variables.append(
                 cnodes.CVarDecl(
-                    name=vtable_ctype.name,
-                    type=vtable_ctype.type,
+                    name=get_class_vtable_name(self.type_ctx, obj_ty),
+                    type=vtable_ctype,
                     value=cnodes.CArrayLiteral(
                         [
                             cnodes.CVariable(
                                 get_class_method_impl_name(
                                     self.type_ctx,
-                                    typesys.Instance(class_ty, []),
+                                    obj_ty,
                                     meth_name,
                                     ensure_instance(meth.type),
                                 )
@@ -375,7 +308,79 @@ class CompileVisitor(Visitor):
                 )
             )
 
+            class_struct = cnodes.CStruct(
+                name=class_type_name,
+                fields=[
+                    cnodes.CStructField(
+                        name="data",
+                        type=data_ctype.as_pointer(),
+                    ),
+                    cnodes.CStructField(
+                        name="vtable",
+                        type=vtable_ctype.as_pointer(),
+                    ),
+                ],
+            )
+
+            self.ctx.code_unit.structs.append(class_struct)
+
+            class_ctype = cnodes.CTypeDef(class_type_name, class_struct.type)
+
+        self.ctx.code_unit.classes.append(class_ctype)
+
+        # Visit methods
+        super().visit_ClassDeclaration(node)
+
         self.class_stack.pop()
+
+    def _make_data_type(self, ci: objects.ClassInfo) -> cnodes.CType:
+        data_ctype = cnodes.CStruct(
+            name=get_class_data_name(
+                self.type_ctx, typesys.Instance(ci.type, [])
+            )
+        )
+
+        for name, field in ci.fields():
+            if is_array_type(field.type):
+                emit_array(self.ctx, field.type)
+            data_ctype.fields.append(
+                cnodes.CStructField(
+                    name=name,
+                    type=get_ctype(self.type_ctx, field.type),
+                )
+            )
+
+        self.ctx.code_unit.structs.append(data_ctype)
+
+        return data_ctype.type
+
+    def _make_vtable_type(self, ci: objects.ClassInfo) -> cnodes.CType:
+        vtable_ctype = cnodes.CStruct(
+            name=get_class_vtable_name(
+                self.type_ctx, typesys.Instance(ci.type, [])
+            )
+        )
+
+        for name, method in ci.methods():
+            if is_array_type(method.return_type):
+                emit_array(self.ctx, method.return_type)
+            for param in method.parameter_types:
+                if is_array_type(param):
+                    emit_array(self.ctx, param)
+
+            if not method.static:
+                meth_cty = get_ctype(self.type_ctx, method.type)
+                assert isinstance(meth_cty, cnodes.CFuncType)
+                meth_cty.parameter_types.insert(
+                    0,
+                    get_ctype(self.type_ctx, typesys.Instance(ci.type, [])),
+                )
+                vtable_ctype.fields.append(
+                    cnodes.CStructField(name=name, type=meth_cty)
+                )
+
+        self.ctx.code_unit.structs.append(vtable_ctype)
+        return vtable_ctype.type
 
     def visit_Method(self, node: ast.Method) -> None:
         class_ty = self.class_stack[-1]
