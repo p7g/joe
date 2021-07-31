@@ -96,12 +96,16 @@ def get_ctype(ctx: TypeContext, typ: typesys.Type) -> cnodes.CType:
         raise NotImplementedError(typ)
 
 
+def get_obj_class_info(ctx: TypeContext, obj_ty: typesys.Instance) -> objects.ClassInfo:
+    ci = ctx.get_class_info(obj_ty.type_constructor)
+    assert ci is not None
+    return ci
+
+
 def get_class_method(
     ctx: TypeContext, obj: cnodes.CExpr, obj_ty: typesys.Instance, name: str
 ) -> cnodes.CExpr:
-    tycon = obj_ty.type_constructor
-    ci = ctx.get_class_info(tycon)
-    assert ci is not None
+    ci = get_obj_class_info(ctx, obj_ty)
 
     meth = ci.attributes[name]
     assert isinstance(meth, objects.Method)
@@ -119,7 +123,7 @@ def get_self() -> cnodes.CVariable:
     return cnodes.CVariable("self")
 
 
-def get_member(
+def get_struct_field(
     struct: cnodes.CExpr, name: str, pointer: bool = False
 ) -> cnodes.CAssignmentTarget:
     return cnodes.CFieldAccess(
@@ -136,32 +140,22 @@ def get_object_data(
     assert ci is not None
     if ci.final:
         return obj
-    return get_member(obj, "data")
+    return get_struct_field(obj, "data")
 
 
-def get_data_member(
+def get_class_field(
     ctx: TypeContext,
     obj: cnodes.CAssignmentTarget,
     obj_ty: typesys.Instance,
     name: str,
 ) -> cnodes.CAssignmentTarget:
     # like: obj.data->field_name
-    return get_member(get_object_data(ctx, obj, obj_ty), name, pointer=True)
+    return get_struct_field(get_object_data(ctx, obj, obj_ty), name, pointer=True)
 
 
 def get_vtable_member(obj: cnodes.CExpr, name: str) -> cnodes.CAssignmentTarget:
     # like: obj.vtable->field_name
-    return get_member(get_member(obj, "vtable"), name, pointer=True)
-
-
-def get_self_data_member(
-    ctx: TypeContext, obj_ty: typesys.Instance, name: str
-) -> cnodes.CAssignmentTarget:
-    return get_data_member(ctx, get_self(), obj_ty, name)
-
-
-def get_self_vtable_member(name: str) -> cnodes.CAssignmentTarget:
-    return get_vtable_member(get_self(), name)
+    return get_struct_field(get_struct_field(obj, "vtable"), name, pointer=True)
 
 
 def get_local_name(name: str) -> str:
@@ -176,14 +170,14 @@ def is_array_type(ty: typesys.Type) -> TypeGuard[typesys.Instance]:
 
 
 def get_array_length(expr: cnodes.CExpr) -> cnodes.CExpr:
-    return get_member(expr, "length")
+    return get_struct_field(expr, "length")
 
 
 def get_array_element(
     expr: cnodes.CExpr, index: cnodes.CExpr
 ) -> cnodes.CAssignmentTarget:
     return cnodes.CArrayIndex(
-        array_value=get_member(expr, "elements"),
+        array_value=get_struct_field(expr, "elements"),
         index_value=index,
     )
 
@@ -616,8 +610,9 @@ class MethodCompiler(ScopeVisitor):
                     self.class_ty.attributes[node.name], objects.Field
                 )
                 # It's accessing a field on self.
-                expr = get_self_data_member(
+                expr = get_class_field(
                     self.type_ctx,
+                    get_self(),
                     typesys.Instance(self.class_ty.type, []),
                     node.name,
                 )
@@ -712,7 +707,7 @@ class MethodCompiler(ScopeVisitor):
             mem = class_info.attributes[node.name]
             if isinstance(mem, objects.Field):
                 assert isinstance(left, cnodes.CAssignmentTarget)
-                expr = get_data_member(self.type_ctx, left, left_ty, node.name)
+                expr = get_class_field(self.type_ctx, left, left_ty, node.name)
             elif isinstance(mem, objects.Method):
                 meth_ty = mem.type
                 assert isinstance(meth_ty, typesys.Instance)
@@ -733,7 +728,7 @@ class MethodCompiler(ScopeVisitor):
         if class_info.final:
             dest = obj_var
         else:
-            dest = get_member(obj_var, "data")
+            dest = get_struct_field(obj_var, "data")
 
         create_data = make_assign_stmt(
             dest,
@@ -747,7 +742,7 @@ class MethodCompiler(ScopeVisitor):
 
         if not class_info.final:
             create_vtable = make_assign_stmt(
-                get_member(obj_var, "vtable"),
+                get_struct_field(obj_var, "vtable"),
                 cnodes.CRef(
                     cnodes.CVariable(
                         get_class_vtable_name(self.type_ctx, obj_ty)
