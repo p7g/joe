@@ -27,50 +27,171 @@ the subclass's vtable to the superclass's vtable).
 
 ## What does it do now?
 
-This is the output of running the `test.py` program against the `simple.java`
-file right now:
+Given a file `simple.java` like this:
+
+```java
+final class simple {
+    int _n;
+
+    void simple(int n) {
+        _n = n;
+    }
+
+    int test(int a) {
+        return a + _n;
+    }
+
+    static void main() {
+        simple s;
+        simple s2 = new simple(123);
+
+        println(s2.test(234));
+        delete s2;
+    }
+
+    static void println(int n) {}
+}
+```
+
+Running `python -m joe --main simple.main simple.java` results in the following
+C code:
 
 ```c
 #include <stdlib.h>
-struct __joe_simple {
-    struct __joe_simple___0data* data;
-    struct __joe_simple___0vtable* vtable;
-};
-struct __joe_simple___0data {
+typedef struct __joe_N6simple_data* __joe_N6simple;
+struct __joe_N6simple_data {
     int _n;
 };
-struct __joe_simple___0vtable {
-    void (*simple)(struct __joe_simple, int);
-    int (*test)(struct __joe_simple, int);
-};
-void __joe_simple___simple(struct __joe_simple self, int __joe_n);
-int __joe_simple___test(struct __joe_simple self, int __joe_a);
-void __joe_simple___main();
-void __joe_simple___println(int __joe_n);
+static void __joe_N6simple6simpleIivEE(__joe_N6simple self, int __joe_L1n);
+static int __joe_N6simple4testIiiEE(__joe_N6simple self, int __joe_L1a);
+static void __joe_N6simple4mainIvEE();
+static void __joe_N6simple7printlnIivEE(int __joe_L1n);
 int main();
-struct __joe_simple___0vtable __joe_simple___0vtable = {__joe_simple___simple, __joe_simple___test};
-void __joe_simple___simple(struct __joe_simple self, int __joe_n) {
-    (((self).data)->_n) = (__joe_n);
+static void __joe_N6simple6simpleIivEE(__joe_N6simple self, int __joe_L1n) {
+    ((self)->_n) = (__joe_L1n);
 }
-int __joe_simple___test(struct __joe_simple self, int __joe_a) {
-    return (__joe_a) + (((self).data)->_n);
+static int __joe_N6simple4testIiiEE(__joe_N6simple self, int __joe_L1a) {
+    return (__joe_L1a) + ((self)->_n);
 }
-void __joe_simple___main() {
-    struct __joe_simple __joe_local_0;
-    int __joe_local_1;
-    ((__joe_local_0).data) = (malloc(sizeof(struct __joe_simple___0data)));
-    ((__joe_local_0).vtable) = (&(__joe_simple___0vtable));
-    ((__joe_local_0).vtable)->simple(__joe_local_0, 123);
-    (__joe_local_1) = (((__joe_local_0).vtable)->test(__joe_local_0, 234));
-    __joe_simple___println(__joe_local_1);
+static void __joe_N6simple4mainIvEE() {
+    __joe_N6simple __joe_L1s;
+    __joe_N6simple __joe_L2s2;
+    __joe_N6simple __joe_tmp_2;
+    int __joe_tmp_3;
+    (__joe_tmp_2) = (malloc(sizeof(struct __joe_N6simple_data)));
+    __joe_N6simple6simpleIivEE(__joe_tmp_2, 123);
+    (__joe_L2s2) = (__joe_tmp_2);
+    (__joe_tmp_3) = (__joe_N6simple4testIiiEE(__joe_L2s2, 234));
+    __joe_N6simple7printlnIivEE(__joe_tmp_3);
+    free(__joe_L2s2);
 }
-void __joe_simple___println(int __joe_n) {
+static void __joe_N6simple7printlnIivEE(int __joe_L1n) {
 }
 int main() {
-    __joe_simple___main();
+    __joe_N6simple4mainIvEE();
     return 0;
 }
 ```
 
 It's not pretty, but it does compile, and it ~sure does print `357\n`~ doesn't
 print anything because I need to figure out C interop.
+
+
+### Tell me about the cool stuff shown in that C above
+
+Since the `simple` class is final, the compiler doesn't even generate a vtable
+for it. Every method call on that class is statically dispatched, and the
+representation of an object is a simple pointer to a data struct (rather than a
+fat pointer like `{data_ptr, vtable_ptr}`).
+
+This justifies having `final` despite not yet having inheritance because it
+results in the following assembly on my system (when the C is compiled with
+`-O3`) (and when I've manually added a call to `printf` in the `println`
+method):
+
+```asm
+	.section	__TEXT,__text,regular,pure_instructions
+	.build_version macos, 11, 0	sdk_version 11, 3
+	.globl	_main                           ## -- Begin function main
+	.p2align	4, 0x90
+_main:                                  ## @main
+	.cfi_startproc
+## %bb.0:
+	pushq	%rbp
+	.cfi_def_cfa_offset 16
+	.cfi_offset %rbp, -16
+	movq	%rsp, %rbp
+	.cfi_def_cfa_register %rbp
+	leaq	L_.str(%rip), %rdi
+	movl	$357, %esi                      ## imm = 0x165
+	xorl	%eax, %eax
+	callq	_printf
+	xorl	%eax, %eax
+	popq	%rbp
+	retq
+	.cfi_endproc
+                                        ## -- End function
+	.section	__TEXT,__cstring,cstring_literals
+L_.str:                                 ## @.str
+	.asciz	"%d\n"
+
+.subsections_via_symbols
+```
+
+Which, thanks to the C compilers that are much better than this humble one, is
+equivalent to a program like this:
+
+```c
+#include <stdio.h>
+
+int main(void) {
+    printf("%d\n", 357);
+    return 0;
+}
+```
+
+## What's next?
+
+The next optimization on my radar (yes I know you can't even write an `if`
+statement yet...) is to, in cases where a class has only a single data member
+and is final, reduce the "data" part of an object to just the single field's
+type. In the example above, the object representation would become just `int`.
+
+This, plus the addition of "unchecked" arrays (i.e. just a pointer under the
+hood) and generics and destructors etc., would allow for a class like this:
+
+```java
+final class Pointer<T> {
+    unchecked T[] _data;
+
+    void Pointer<T>(unchecked T[] data) {
+        _data = data;
+    }
+
+    // invoked by `delete ptr_obj;`
+    ~Pointer() {
+        delete _data;
+    }
+
+    T read() {
+        return readAt(0);
+    }
+
+    T readAt(int pos) {
+        return _data[pos];
+    }
+
+    void write(T value) {
+        writeAt(0, value);
+    }
+
+    void writeAt(int pos, T value) {
+        _data[pos] = value;
+    }
+}
+```
+
+If you're thinking what I'm thinking, this seems like a great way to implement
+interop with C without introducing _actual_ pointers to the language (imagine
+`Pointer<char>` for a second; the representation of it would literally just be
+`char *`).
