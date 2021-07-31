@@ -31,7 +31,7 @@ Given a file `simple.java` like this:
 
 ```java
 final class simple {
-    int _n;
+    final int _n;
 
     void simple(int n) {
         _n = n;
@@ -58,32 +58,28 @@ C code:
 
 ```c
 #include <stdlib.h>
-typedef struct __joe_N6simple_data* __joe_N6simple;
-struct __joe_N6simple_data {
-    int _n;
-};
-static void __joe_N6simple6simpleIivEE(__joe_N6simple self, int __joe_L1n);
+typedef int __joe_N6simple_data;
+typedef __joe_N6simple_data __joe_N6simple;
+static void __joe_N6simple6simpleIivEE(__joe_N6simple* self, int __joe_L1n);
 static int __joe_N6simple4testIiiEE(__joe_N6simple self, int __joe_L1a);
 static void __joe_N6simple4mainIvEE();
 static void __joe_N6simple7printlnIivEE(int __joe_L1n);
 int main();
-static void __joe_N6simple6simpleIivEE(__joe_N6simple self, int __joe_L1n) {
-    ((self)->_n) = (__joe_L1n);
+static void __joe_N6simple6simpleIivEE(__joe_N6simple* self, int __joe_L1n) {
+    ((self)[0]) = (__joe_L1n);
 }
 static int __joe_N6simple4testIiiEE(__joe_N6simple self, int __joe_L1a) {
-    return (__joe_L1a) + ((self)->_n);
+    return (__joe_L1a) + (self);
 }
 static void __joe_N6simple4mainIvEE() {
     __joe_N6simple __joe_L1s;
     __joe_N6simple __joe_L2s2;
     __joe_N6simple __joe_tmp_2;
     int __joe_tmp_3;
-    (__joe_tmp_2) = (malloc(sizeof(struct __joe_N6simple_data)));
-    __joe_N6simple6simpleIivEE(__joe_tmp_2, 123);
+    __joe_N6simple6simpleIivEE(&(__joe_tmp_2), 123);
     (__joe_L2s2) = (__joe_tmp_2);
     (__joe_tmp_3) = (__joe_N6simple4testIiiEE(__joe_L2s2, 234));
     __joe_N6simple7printlnIivEE(__joe_tmp_3);
-    free(__joe_L2s2);
 }
 static void __joe_N6simple7printlnIivEE(int __joe_L1n) {
 }
@@ -100,9 +96,20 @@ print anything because I need to figure out C interop.
 ### Tell me about the cool stuff shown in that C above
 
 Since the `simple` class is final, the compiler doesn't even generate a vtable
-for it. Every method call on that class is statically dispatched, and the
-representation of an object is a simple pointer to a data struct (rather than a
-fat pointer like `{data_ptr, vtable_ptr}`).
+for it. Every method call on that class is statically dispatched.
+
+On top of that, since there is only one field in the class, the compiler can
+avoid creating a data struct, instead just using a pointer to the single
+field's type as the object data (this should have no performance benefit; a
+single-field struct has the same runtime representation as the type of the
+single field).
+
+On top of _that_, since the single field is `final`, the compiler can use the
+type of the field as the object data (in this case the constructor is passed a
+reference to `self` so that the stack value can be initialized).
+
+The end result is that the `simple` class in the above example is just a
+typedef of `int`.
 
 This justifies having `final` despite not yet having inheritance because it
 results in the following assembly on my system (when the C is compiled with
@@ -156,6 +163,7 @@ The next optimization on my radar (yes I know you can't even write an `if`
 statement yet...) is to, in cases where a class has only a single data member
 and is final, reduce the "data" part of an object to just the single field's
 type. In the example above, the object representation would become just `int`.
+(DONE)
 
 This, plus the addition of "unchecked" arrays (i.e. just a pointer under the
 hood) and generics and destructors etc., would allow for a class like this:
