@@ -146,7 +146,7 @@ def get_object_data(
 
 
 def object_data_needs_allocation(ci: objects.ClassInfo) -> bool:
-    return not (ci.field_count == 1 and next(ci.fields())[1].final)
+    return not (ci.final and ci.field_count == 1 and next(ci.fields())[1].final)
 
 
 def get_class_field(
@@ -156,7 +156,7 @@ def get_class_field(
     name: str,
 ) -> cnodes.CAssignmentTarget:
     ci = get_obj_class_info(ctx, obj_ty)
-    if ci.field_count == 1:
+    if ci.final and ci.field_count == 1:
         expected_name, only_field = next(ci.fields())
         assert name == expected_name
         data = get_object_data(ctx, obj, obj_ty)
@@ -355,7 +355,7 @@ class CompileVisitor(Visitor):
         self.class_stack.pop()
 
     def _make_data_type(self, ci: objects.ClassInfo) -> cnodes.CType:
-        if ci.field_count == 1:
+        if ci.final and ci.field_count == 1:
             _name, field = next(ci.fields())
             field_type = get_ctype(self.type_ctx, next(ci.fields())[1].type)
             # If a field is final it can't be reassigned, so there's no need to
