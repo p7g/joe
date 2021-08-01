@@ -299,32 +299,36 @@ class CompileVisitor(Visitor):
         data_ctype = cnodes.CNamedType(data_name)
         class_type_name = get_type_name(self.type_ctx, obj_ty)
 
+        vtable_ctype = self._make_vtable_type(class_info)
+        self.ctx.code_unit.variables.append(
+            cnodes.CVarDecl(
+                name=get_class_vtable_name(self.type_ctx, obj_ty),
+                type=vtable_ctype,
+                value=cnodes.CArrayLiteral(
+                    [
+                        cnodes.CVariable(
+                            get_class_method_impl_name(
+                                self.type_ctx,
+                                obj_ty,
+                                meth_name,
+                                ensure_instance(meth.type),
+                            )
+                        )
+                        for meth_name, meth in class_info.attributes.items()
+                        if isinstance(meth, objects.Method)
+                        and not meth.static
+                    ]
+                ),
+            )
+        )
+
         if class_info.final:
+            # When a final class is used as a value of its own type, there is
+            # no need to include a vtable, we can use static dispatch. The
+            # vtable still exists in case the object is used as a value of a
+            # superclass.
             class_ctype = cnodes.CTypeDef(class_type_name, data_ctype)
         else:
-            vtable_ctype = self._make_vtable_type(class_info)
-            self.ctx.code_unit.variables.append(
-                cnodes.CVarDecl(
-                    name=get_class_vtable_name(self.type_ctx, obj_ty),
-                    type=vtable_ctype,
-                    value=cnodes.CArrayLiteral(
-                        [
-                            cnodes.CVariable(
-                                get_class_method_impl_name(
-                                    self.type_ctx,
-                                    obj_ty,
-                                    meth_name,
-                                    ensure_instance(meth.type),
-                                )
-                            )
-                            for meth_name, meth in class_info.attributes.items()
-                            if isinstance(meth, objects.Method)
-                            and not meth.static
-                        ]
-                    ),
-                )
-            )
-
             class_struct = cnodes.CStruct(
                 name=class_type_name,
                 fields=[
