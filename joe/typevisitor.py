@@ -85,6 +85,7 @@ class ClassDeclarationVisitor(Visitor):
             )
         self.ty.attributes[node.name.value] = objects.Field(
             self.analyze_type(node.type),
+            self.ty,
             final=node.final,
         )
 
@@ -107,6 +108,7 @@ class ClassDeclarationVisitor(Visitor):
         )
         self.ty.attributes[node.name.value] = objects.Method(
             meth_ty,
+            self.ty,
             static=node.static,
             final=node.final,
         )

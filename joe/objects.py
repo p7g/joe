@@ -41,13 +41,13 @@ class ClassInfo:
 class Attribute:
     """Method or field"""
 
-    def __init__(self, type_: typesys.Type) -> None:
+    def __init__(self, type_: typesys.Type, ci: ClassInfo) -> None:
         self.type = type_
 
 
 class Method(Attribute):
-    def __init__(self, type_: typesys.Type, static: bool, final: bool) -> None:
-        super().__init__(type_)
+    def __init__(self, type_: typesys.Type, ci: ClassInfo, static: bool, final: bool) -> None:
+        super().__init__(type_, ci)
         self.static = static
         self.final = final
 
@@ -69,6 +69,6 @@ class Method(Attribute):
 
 
 class Field(Attribute):
-    def __init__(self, type_: typesys.Type, final: bool) -> None:
-        super().__init__(type_)
+    def __init__(self, type_: typesys.Type, ci: ClassInfo, final: bool) -> None:
+        super().__init__(type_, ci)
         self.final = final
