@@ -29,11 +29,3 @@ class Peekable(t.Generic[Peekable_T]):
         copied = Peekable(it_copy)
         copied._peeked = peeked_copy
         return copied
-
-
-def warn(msg: str, *args) -> None:
-    print(
-        f"WARN: {msg}",
-        *args,  # type: ignore
-        file=sys.stderr,
-    )

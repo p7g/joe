@@ -6,7 +6,7 @@ from patina import Option, None_
 from joe import ast
 from joe.lexer import Token, TokenType, lex
 from joe.source import Location, JoeSyntaxError
-from joe._utils import Peekable, warn
+from joe._utils import Peekable
 
 
 class ModulePath(t.List[str]):
