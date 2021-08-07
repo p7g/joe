@@ -60,6 +60,7 @@ class Method(Node):
 @dataclass(eq=False)
 class ClassDeclaration(Node):
     name: Name
+    superclass: t.Optional[Type]
     fields: t.List[Field] = field(default_factory=list)
     methods: t.List[Method] = field(default_factory=list)
     final: bool = False

@@ -1,7 +1,9 @@
+import functools
 import typing as t
 from dataclasses import dataclass
 from joe import ast, objects, typesys
 from joe.context import TypeContext
+from joe.diagnostics import Diagnostic
 from joe.source import JoeNameError, JoeSyntaxError, JoeTypeError, Location
 from joe.visitor import Visitor
 from joe.scopevisitor import ScopeVisitor
@@ -38,12 +40,6 @@ class TypeVisitor(Visitor):
         self.result = Arrays.get_type(element_ty)
 
 
-# Class visitor:
-# - Runs for each class and records the (analyzed) types of all fields and
-#   methods.
-# - The results are used to populate the global list of classes and types
-
-
 class ClassDeclarationVisitor(Visitor):
     def __init__(self, type_ctx: TypeContext, name: str):
         self.ty = objects.ClassInfo(
@@ -53,6 +49,7 @@ class ClassDeclarationVisitor(Visitor):
             ),
             attributes={},
             final=False,
+            superclass=None,
         )
         self.type_ctx = type_ctx
 
@@ -70,18 +67,37 @@ class ClassDeclarationVisitor(Visitor):
         return TypeVisitor.analyze(self.type_ctx, node)
 
     def visit_ClassDeclaration(self, node: ast.ClassDeclaration):
-        # TODO: inheritance (don't forget to check if super is final)
-        # if node.extends:
-        #     self.superclass = self.analyze_type(node.extends)
+        sup_ci = None
+        if node.superclass is not None:
+            sup_ty = self.analyze_type(node.superclass)
+            assert isinstance(sup_ty, typesys.Instance)
+            sup_ci = self.type_ctx.get_class_info(sup_ty.type_constructor)
+            if sup_ci is None:
+                raise JoeTypeError(
+                    node.superclass.location, "Cannot extend primitive type"
+                )
+            if sup_ci.final:
+                raise JoeTypeError(
+                    node.superclass.location, "Cannot extend final class"
+                )
+            self.ty.superclass = sup_ci
+            self.ty.type.super = typesys.Instance(sup_ci.type, [])
+
+        self.ty.final = node.final
         # Add current class to scope after resolving superclass (avoid cycle)
         self.type_ctx.add_class(self.ty)
-        self.ty.final = node.final
         super().visit_ClassDeclaration(node)
 
     def visit_Field(self, node: ast.Field):
         if node.name.value in self.ty.attributes:
             raise JoeSyntaxError(
                 node.location, f"Duplicate attribute name '{node.name.value}'"
+            )
+        elif node.name.value in [
+            name for name, _attr in self.ty.all_attributes()
+        ]:
+            Diagnostic.hidden_field(
+                node.name.value, self.ty.id.name, location=node.location
             )
         self.ty.attributes[node.name.value] = objects.Field(
             self.analyze_type(node.type),
@@ -106,14 +122,26 @@ class ClassDeclarationVisitor(Visitor):
             [self.analyze_type(p.type) for p in node.parameters]
             + [self.analyze_type(node.return_type)],
         )
+        parent_attr = self.ty.get_attribute(node.name.value)
+        if parent_attr is not None:
+            assert isinstance(parent_attr, objects.Method)
+            if parent_attr.final:
+                raise JoeTypeError(node.location, "Cannot override final method")
+            if (
+                parent_attr.type != meth_ty
+                and not parent_attr.type.is_supertype_of(meth_ty)
+            ):
+                raise JoeTypeError(node.location, "Incompatible method override")
         self.ty.attributes[node.name.value] = objects.Method(
             meth_ty,
             self.ty,
             static=node.static,
             final=node.final,
+            overrides=parent_attr,
         )
 
 
+@functools.lru_cache(None)  # type: ignore
 def function_type(arity: int) -> typesys.TypeConstructor:
     return typesys.TypeConstructor(
         parameters=[
@@ -147,21 +175,11 @@ class Arrays:
         return typesys.Instance(cls.get_type_constructor(), [element_type])
 
 
-# Method visitors:
-# - Semantic analysis
-# - Type checking
-# - A series of transformations on methods
-#   - Flatten scopes (i.e. transform lexical scope to function scope)
-
-
 @dataclass
 class _Local:
     actual_name: str
     type: typesys.Type
 
-
-# TODO: Use separate pass to convert lexical scoping to function scoping (i.e.
-# collect all the local variables used and their types in 1 place).
 
 # The class's type should already exist in GlobalContext. This means that the
 # types of all methods and members should already be analyzed.
@@ -258,9 +276,9 @@ class MethodExprTypeVisitor(ScopeVisitor):
             assert isinstance(left_ty, typesys.Instance)
             class_info = self.type_ctx.get_class_info(left_ty.type_constructor)
             assert class_info is not None, "Accessing property of primitive"
-            if node.target.name not in class_info.attributes:
+            if not class_info.has_attribute(node.target.name):
                 raise JoeTypeError(node.target.location, "No such attribute")
-            attr = class_info.attributes[node.target.name]
+            attr = class_info.get_attribute(node.target.name)
             if isinstance(attr, objects.Method):
                 raise JoeTypeError(node.target.location, "Assignment to method")
             else:
@@ -276,9 +294,9 @@ class MethodExprTypeVisitor(ScopeVisitor):
                     node.target.name, location=node.target.location
                 )
             except JoeNameError:
-                if node.target.name not in self.class_.attributes:
+                if not self.class_.has_attribute(node.target.name):
                     raise
-                attr = self.class_.attributes[node.target.name]
+                attr = self.class_.get_attribute(node.target.name)
                 if isinstance(attr, objects.Method):
                     raise JoeTypeError(
                         node.target.location, "Assignment to method"
@@ -311,6 +329,7 @@ class MethodExprTypeVisitor(ScopeVisitor):
                 node.type.location, "Can't create primitive object"
             )
         class_basename = class_info.id.name.rsplit(".")[-1]
+        # FIXME: if no constructor declared copy it from parent
         constructor = class_info.attributes.get(class_basename)
         if constructor is None:
             if node.arguments:
@@ -338,7 +357,7 @@ class MethodExprTypeVisitor(ScopeVisitor):
             loc = self.resolve_local(name_str, location=node.location)
             ty = loc.type
         except JoeNameError:
-            attr = self.class_.attributes.get(name_str)
+            attr = self.class_.get_attribute(name_str)
             if attr is None:
                 raise
             ty = attr.type
@@ -354,7 +373,7 @@ class MethodExprTypeVisitor(ScopeVisitor):
             raise JoeTypeError(
                 node.location, f"Can't access property on {lhs_ty!r}"
             )
-        attr = class_info.attributes.get(node.name)
+        attr = class_info.get_attribute(node.name)
         if attr is None:
             raise JoeTypeError(node.location, f"No such property {node.name}")
         self.set_type(node, attr.type)
@@ -394,7 +413,7 @@ class MethodExprTypeVisitor(ScopeVisitor):
                 node.location, "Cannot call method on primitive type"
             )
 
-        called_method = class_info.attributes.get(method_name)
+        called_method = class_info.get_attribute(method_name)
         if called_method is None:
             raise JoeTypeError(node.location, "No such method")
 
@@ -491,6 +510,16 @@ class MethodExprTypeVisitor(ScopeVisitor):
         super().visit_VarDeclaration(node)
 
         actual_name = self.resolve_name(node.name.value, location=node.location)
+        local_type = self.analyze_type(node.type)
         self.locals[actual_name] = _Local(
-            actual_name=actual_name, type=self.analyze_type(node.type)
+            actual_name=actual_name, type=local_type
         )
+
+        if node.initializer is not None:
+            init_type = self.get_type(node.initializer)
+            if local_type != init_type and not local_type.is_supertype_of(
+                init_type
+            ):
+                raise JoeTypeError(
+                    node.initializer.location, "Incompatible assignment"
+                )

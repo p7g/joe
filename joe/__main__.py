@@ -33,14 +33,15 @@ def main() -> int:
     mods = p.parse_file()
 
     if dump_ast:
-        print(mods[0])
+        print(mods)
         return 0
 
     ctx = GlobalContext()
     ctx.populate_from_modules(mods)
 
     vis = CompileVisitor(ctx)
-    vis.visit(mods[0].class_decl)
+    for mod in mods:
+        vis.visit(mod.class_decl)
     if main_name:
         vis.compile_main_function(main_name)
 

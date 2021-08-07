@@ -302,7 +302,7 @@ class CCast(CExpr):
     new_type: CType
 
     def __str__(self):
-        return f"(({self.new_type.render()}) {self.value})"
+        return f"(({self.new_type.render()}) ({self.value}))"
 
 
 @dataclass

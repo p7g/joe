@@ -107,7 +107,12 @@ class Parser:
         class_tok = self.tokens.next().expect(TokenType.Class)
         name_tok = self.tokens.next().expect(TokenType.Ident)
 
-        # FIXME: extends, implements
+        superclass = None
+        if self.tokens.peek().type == TokenType.Extends:
+            self.tokens.next()
+            superclass = self._parse_type()
+
+        # FIXME: implements
         self.tokens.next().expect(TokenType.LBrace)
 
         class_name = name_tok.value
@@ -116,6 +121,7 @@ class Parser:
 
         return ast.ClassDeclaration(
             name=ast.Name(value=class_name, location=name_tok.location),
+            superclass=superclass,
             fields=fields,
             methods=methods,
             location=class_tok.location,
