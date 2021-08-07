@@ -302,7 +302,13 @@ class CCast(CExpr):
     new_type: CType
 
     def __str__(self):
-        return f"(({self.new_type.render()}) ({self.value}))"
+        # Special case for struct literals
+        value_str = (
+            str(self.value)
+            if isinstance(self.value, CArrayLiteral)
+            else f"({self.value})"
+        )
+        return f"(({self.new_type.render()}) {value_str})"
 
 
 @dataclass

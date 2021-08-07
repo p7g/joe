@@ -877,7 +877,16 @@ class MethodCompiler(ScopeVisitor):
                 receiver = self.new_variable(parent_type)
                 cfunc.body.append(
                     make_assign_stmt(
-                        receiver, cnodes.CArrayLiteral([recv_data, recv_vtable])
+                        receiver,
+                        cnodes.CCast(
+                            value=cnodes.CArrayLiteral(
+                                [recv_data, recv_vtable]
+                            ),
+                            new_type=get_ctype(
+                                self.type_ctx,
+                                typesys.Instance(meth_info.class_info.type, []),
+                            ),
+                        ),
                     ),
                 )
 
