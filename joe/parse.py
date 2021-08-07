@@ -315,5 +315,7 @@ class Parser:
             )
         elif tok.type == TokenType.Super:
             return ast.SuperExpr(location=tok.location)
+        elif tok.type == TokenType.This:
+            return ast.ThisExpr(location=tok.location)
         else:
             raise NotImplementedError(tok)

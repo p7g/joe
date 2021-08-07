@@ -90,6 +90,8 @@ class Visitor:
             self.visit_PlusExpr(node)
         elif isinstance(node, ast.SuperExpr):
             self.visit_SuperExpr(node)
+        elif isinstance(node, ast.ThisExpr):
+            self.visit_ThisExpr(node)
         else:
             raise NotImplementedError(node)
 
@@ -112,6 +114,9 @@ class Visitor:
             self.visit_Expr(arg)
 
     def visit_SuperExpr(self, node: ast.SuperExpr):
+        pass
+
+    def visit_ThisExpr(self, node: ast.ThisExpr):
         pass
 
     def visit_IdentExpr(self, node: ast.IdentExpr):

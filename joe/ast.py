@@ -106,6 +106,11 @@ class SuperExpr(Expr):
 
 
 @dataclass(eq=False)
+class ThisExpr(Expr):
+    pass
+
+
+@dataclass(eq=False)
 class IdentExpr(AssignmentTarget):
     name: str
 

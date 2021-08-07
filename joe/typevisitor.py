@@ -366,6 +366,14 @@ class MethodExprTypeVisitor(ScopeVisitor):
             raise JoeTypeError(node.location, "No superclass")
         self.set_type(node, typesys.Instance(self.class_.superclass.type, []))
 
+    def visit_ThisExpr(self, node: ast.ThisExpr):
+        super().visit_ThisExpr(node)
+        if self.method.static:
+            raise JoeSyntaxError(
+                node.location, "Can't use this in static method"
+            )
+        self.set_type(node, typesys.Instance(self.class_.type, []))
+
     def visit_IdentExpr(self, node: ast.IdentExpr):
         name_str = node.name
         try:

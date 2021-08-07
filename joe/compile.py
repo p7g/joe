@@ -1087,6 +1087,9 @@ class MethodCompiler(ScopeVisitor):
         # For calling `super.method()`
         self.receiver.replace(this_as_parent)
 
+    def visit_ThisExpr(self, node: ast.ThisExpr) -> None:
+        self.last_expr.replace(get_self())
+
     def visit_IndexExpr(self, node: ast.IndexExpr) -> None:
         self.visit_Expr(node.target)
         target = self.last_expr.take().unwrap()
