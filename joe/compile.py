@@ -945,7 +945,7 @@ class MethodCompiler(ScopeVisitor):
         else:
             class_info = self.type_ctx.get_class_info(left_ty.type_constructor)
             assert class_info is not None
-            mem = class_info.attributes[node.name]
+            mem = class_info.get_attribute(node.name)
             if isinstance(mem, objects.Field):
                 assert isinstance(left, cnodes.CAssignmentTarget)
                 expr = get_class_field(self.type_ctx, left, left_ty, node.name)
