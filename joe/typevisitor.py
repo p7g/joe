@@ -126,12 +126,16 @@ class ClassDeclarationVisitor(Visitor):
         if parent_attr is not None:
             assert isinstance(parent_attr, objects.Method)
             if parent_attr.final:
-                raise JoeTypeError(node.location, "Cannot override final method")
+                raise JoeTypeError(
+                    node.location, "Cannot override final method"
+                )
             if (
                 parent_attr.type != meth_ty
                 and not parent_attr.type.is_supertype_of(meth_ty)
             ):
-                raise JoeTypeError(node.location, "Incompatible method override")
+                raise JoeTypeError(
+                    node.location, "Incompatible method override"
+                )
         self.ty.attributes[node.name.value] = objects.Method(
             meth_ty,
             self.ty,
@@ -351,6 +355,17 @@ class MethodExprTypeVisitor(ScopeVisitor):
                     )
         self.set_type(node, created_type)
 
+    def visit_SuperExpr(self, node: ast.SuperExpr):
+        super().visit_SuperExpr(node)
+        if self.method.static:
+            raise JoeSyntaxError(
+                node.location, "Can't use super in static method"
+            )
+        if self.class_.superclass is None:
+            # FIXME: implicit Object superclass or something
+            raise JoeTypeError(node.location, "No superclass")
+        self.set_type(node, typesys.Instance(self.class_.superclass.type, []))
+
     def visit_IdentExpr(self, node: ast.IdentExpr):
         name_str = node.name
         try:
@@ -387,13 +402,17 @@ class MethodExprTypeVisitor(ScopeVisitor):
         super().visit_CallExpr(node)
         fn_ty = self.get_type(node.target)
         assert isinstance(fn_ty, typesys.Instance)
-        if not fn_ty.type_constructor.is_function:
+        if not fn_ty.type_constructor.is_function and not isinstance(
+            node.target, ast.SuperExpr
+        ):
             raise JoeTypeError(node.location, "Target is not callable")
         # Get target type constructor
         # Get class info
         # Get attribute
         # Ensure method
-        assert isinstance(node.target, (ast.IdentExpr, ast.DotExpr))
+        assert isinstance(
+            node.target, (ast.IdentExpr, ast.DotExpr, ast.SuperExpr)
+        )
         if isinstance(node.target, ast.IdentExpr):
             # Method on current class instance
             target_tycon = self.class_.type
@@ -405,7 +424,19 @@ class MethodExprTypeVisitor(ScopeVisitor):
             assert isinstance(recv_ty, typesys.Instance)
             target_tycon = recv_ty.type_constructor
             method_name = node.target.name
-            this_is_receiver = False
+            # If the call is like `super.someMethod()` then `this` is still the
+            # receiver (more precisely {this.data.parent, this.vtable.parent})
+            this_is_receiver = isinstance(node.target.left, ast.SuperExpr)
+        elif isinstance(node.target, ast.SuperExpr):
+            if not self.is_constructor:
+                raise JoeSyntaxError(
+                    node.location,
+                    "Can only call super constructor from subclass constructor",
+                )
+            assert self.class_.superclass is not None
+            target_tycon = self.class_.superclass.type
+            method_name = self.class_.superclass.id.name.rsplit(".", 1)[-1]
+            this_is_receiver = True
 
         class_info = self.type_ctx.get_class_info(target_tycon)
         if class_info is None:

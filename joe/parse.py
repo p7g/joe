@@ -313,5 +313,7 @@ class Parser:
             return ast.NewExpr(
                 location=new_tok.location, type=ty, arguments=args
             )
+        elif tok.type == TokenType.Super:
+            return ast.SuperExpr(location=tok.location)
         else:
             raise NotImplementedError(tok)

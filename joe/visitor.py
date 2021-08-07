@@ -88,6 +88,8 @@ class Visitor:
             self.visit_CallExpr(node)
         elif isinstance(node, ast.PlusExpr):
             self.visit_PlusExpr(node)
+        elif isinstance(node, ast.SuperExpr):
+            self.visit_SuperExpr(node)
         else:
             raise NotImplementedError(node)
 
@@ -108,6 +110,9 @@ class Visitor:
     def visit_NewExpr(self, node: ast.NewExpr):
         for arg in node.arguments:
             self.visit_Expr(arg)
+
+    def visit_SuperExpr(self, node: ast.SuperExpr):
+        pass
 
     def visit_IdentExpr(self, node: ast.IdentExpr):
         pass

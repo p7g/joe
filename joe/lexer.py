@@ -22,6 +22,7 @@ class TokenType(enum.IntEnum):
     New = enum.auto()
     Return = enum.auto()
     Static = enum.auto()
+    Super = enum.auto()
     This = enum.auto()
     Void = enum.auto()
     While = enum.auto()
@@ -87,6 +88,7 @@ _keywords = {
     "new": TokenType.New,
     "return": TokenType.Return,
     "static": TokenType.Static,
+    "super": TokenType.Super,
     "this": TokenType.This,
     "void": TokenType.Void,
     "while": TokenType.While,

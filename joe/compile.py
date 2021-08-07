@@ -117,16 +117,18 @@ def get_obj_class_info(
 
 def get_class_method(
     ctx: TypeContext,
-    obj: cnodes.CAssignmentTarget,
+    obj: cnodes.CExpr,
     obj_ty: typesys.Instance,
     name: str,
+    *,
+    force_static_dispatch: bool = False,
 ) -> cnodes.CExpr:
     ci = get_obj_class_info(ctx, obj_ty)
 
     meth = ci.get_attribute(name)
     assert isinstance(meth, objects.Method)
 
-    if meth.final or ci.final:
+    if meth.final or ci.final or force_static_dispatch:
         assert isinstance(meth.type, typesys.Instance)
         return cnodes.CVariable(get_class_method_impl_name(ctx, obj_ty, name))
     else:
@@ -152,8 +154,8 @@ def get_struct_field(
 
 
 def get_object_data(
-    ctx: TypeContext, obj: cnodes.CAssignmentTarget, obj_ty: typesys.Instance
-) -> cnodes.CAssignmentTarget:
+    ctx: TypeContext, obj: cnodes.CExpr, obj_ty: typesys.Instance
+) -> cnodes.CExpr:
     ci = ctx.get_class_info(obj_ty.type_constructor)
     assert ci is not None
     if ci.final:
@@ -162,7 +164,7 @@ def get_object_data(
 
 
 def get_object_vtable(
-    ctx: TypeContext, obj: cnodes.CAssignmentTarget, obj_ty: typesys.Instance
+    ctx: TypeContext, obj: cnodes.CExpr, obj_ty: typesys.Instance
 ) -> cnodes.CExpr:
     ci = ctx.get_class_info(obj_ty.type_constructor)
     assert ci is not None
@@ -184,10 +186,10 @@ def optimize_single_field(ci: objects.ClassInfo) -> bool:
 
 def get_class_field(
     ctx: TypeContext,
-    obj: cnodes.CAssignmentTarget,
+    obj: cnodes.CExpr,
     obj_ty: typesys.Instance,
     name: str,
-) -> cnodes.CAssignmentTarget:
+) -> cnodes.CExpr:
     ci = get_obj_class_info(ctx, obj_ty)
     if optimize_single_field(ci):
         expected_name, only_field = next(ci.fields())
@@ -246,6 +248,15 @@ def make_assign_stmt(
     return cnodes.CExprStmt(cnodes.CAssignmentExpr(dest, value))
 
 
+def make_struct_literal(
+    ty: cnodes.CType, elements: t.List[cnodes.CExpr]
+) -> cnodes.CExpr:
+    return cnodes.CCast(
+        value=cnodes.CArrayLiteral(elements),
+        new_type=ty,
+    )
+
+
 def get_array_name(ctx: TypeContext, array_ty: typesys.Type) -> str:
     assert is_array_type(array_ty)
     return prefix_ident(
@@ -299,7 +310,7 @@ def make_free(expr: cnodes.CExpr) -> cnodes.CStmt:
 
 def cast_as_parent(
     ctx: TypeContext,
-    obj: cnodes.CAssignmentTarget,
+    obj: cnodes.CExpr,
     obj_ty: typesys.Instance,
     parent: objects.ClassInfo,
 ) -> t.Tuple[cnodes.CExpr, cnodes.CExpr]:
@@ -836,10 +847,14 @@ class MethodCompiler(ScopeVisitor):
         target = self.last_expr.take().unwrap()
         func_ty = self.get_node_type(node.target)
         assert isinstance(func_ty, typesys.Instance)
-        assert func_ty.type_constructor.is_function
+        assert func_ty.type_constructor.is_function or isinstance(
+            node.target, ast.SuperExpr
+        )
 
         # FIXME: it should be easier to get the method info
-        assert isinstance(node.target, (ast.IdentExpr, ast.DotExpr))
+        assert isinstance(
+            node.target, (ast.IdentExpr, ast.DotExpr, ast.SuperExpr)
+        )
         if isinstance(node.target, ast.IdentExpr):
             class_info = self.class_ty
             meth_name = node.target.name
@@ -850,6 +865,11 @@ class MethodCompiler(ScopeVisitor):
             assert class_info2 is not None
             class_info = class_info2
             meth_name = node.target.name
+        elif isinstance(node.target, ast.SuperExpr):
+            assert self.is_constructor
+            assert self.class_ty.superclass is not None
+            class_info = self.class_ty.superclass
+            meth_name = self.class_ty.superclass.id.name.rsplit(".", 1)[-1]
 
         meth_info = class_info.get_attribute(meth_name)
         assert isinstance(meth_info, objects.Method)
@@ -878,14 +898,12 @@ class MethodCompiler(ScopeVisitor):
                 cfunc.body.append(
                     make_assign_stmt(
                         receiver,
-                        cnodes.CCast(
-                            value=cnodes.CArrayLiteral(
-                                [recv_data, recv_vtable]
-                            ),
-                            new_type=get_ctype(
+                        make_struct_literal(
+                            get_ctype(
                                 self.type_ctx,
                                 typesys.Instance(meth_info.class_info.type, []),
                             ),
+                            [recv_data, recv_vtable],
                         ),
                     ),
                 )
@@ -938,6 +956,18 @@ class MethodCompiler(ScopeVisitor):
         left_ty = self.get_node_type(node.left)
         assert isinstance(left_ty, typesys.Instance)
 
+        force_static_dispatch = False
+        if isinstance(node.left, ast.SuperExpr):
+            left = self.new_variable(left_ty)
+            self.cfunction.unwrap().body.append(
+                make_assign_stmt(left, self.receiver.take().unwrap())
+            )
+            # When calling a method like `super.someMethod()` we know which
+            # method that is statically, since `super` can only represent the
+            # current class's superclass, and the superclass is decided
+            # statically.
+            force_static_dispatch = True
+
         if is_array_type(left_ty):
             # The only field on an array (no data struct)
             assert node.name == "length"
@@ -947,13 +977,17 @@ class MethodCompiler(ScopeVisitor):
             assert class_info is not None
             mem = class_info.get_attribute(node.name)
             if isinstance(mem, objects.Field):
-                assert isinstance(left, cnodes.CAssignmentTarget)
                 expr = get_class_field(self.type_ctx, left, left_ty, node.name)
             elif isinstance(mem, objects.Method):
                 meth_ty = mem.type
                 assert isinstance(meth_ty, typesys.Instance)
-                assert isinstance(left, cnodes.CAssignmentTarget)
-                expr = get_class_method(self.type_ctx, left, left_ty, node.name)
+                expr = get_class_method(
+                    self.type_ctx,
+                    left,
+                    left_ty,
+                    node.name,
+                    force_static_dispatch=force_static_dispatch,
+                )
                 self.receiver.replace(left)
             else:
                 raise JoeUnreachable()
@@ -971,6 +1005,7 @@ class MethodCompiler(ScopeVisitor):
         dest = get_object_data(self.type_ctx, obj_var, obj_ty)
 
         if not optimize_single_field(class_info):
+            assert isinstance(dest, cnodes.CAssignmentTarget)
             create_data = make_assign_stmt(
                 dest,
                 make_malloc(
@@ -1022,6 +1057,35 @@ class MethodCompiler(ScopeVisitor):
             cfunc.body.append(call_constructor)
 
         self.last_expr.replace(obj_var)
+
+    def visit_SuperExpr(self, node: ast.SuperExpr) -> None:
+        assert self.class_ty.superclass is not None
+        this_as_parent = make_struct_literal(
+            get_ctype(
+                self.type_ctx,
+                typesys.Instance(self.class_ty.superclass.type, []),
+            ),
+            list(
+                cast_as_parent(
+                    self.type_ctx,
+                    get_self(),
+                    typesys.Instance(self.class_ty.type, []),
+                    self.class_ty.superclass,
+                )
+            ),
+        )
+        # For calling `super()`
+        self.last_expr.replace(
+            cnodes.CVariable(
+                get_class_method_impl_name(
+                    self.type_ctx,
+                    typesys.Instance(self.class_ty.superclass.type, []),
+                    self.class_ty.superclass.id.name.rsplit(".", 1)[-1],
+                )
+            )
+        )
+        # For calling `super.method()`
+        self.receiver.replace(this_as_parent)
 
     def visit_IndexExpr(self, node: ast.IndexExpr) -> None:
         self.visit_Expr(node.target)
