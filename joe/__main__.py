@@ -12,7 +12,7 @@ def main() -> int:
         "--main",
         "-m",
         dest="main_name",
-        help="Specify the path to the main method",
+        help="Specify the class which has the main method",
     )
     argparser.add_argument(
         "--dump-ast",

@@ -604,25 +604,26 @@ class CompileVisitor(Visitor):
         func = comp.cfunction.take().unwrap()
         self.ctx.code_unit.functions.append(func)
 
-    def compile_main_function(self, name: str):
-        class_path, meth_name = name.rsplit(".")
+    def compile_main_function(self, class_path: str):
         cls_ty = self.type_ctx.get_type_constructor(class_path)
         class_info = self.type_ctx.get_class_info(cls_ty) if cls_ty else None
         if cls_ty is None or class_info is None:
             # FIXME: Another exception type?
             raise Exception(f"Invalid class for main method: {class_path}")
-        meth = class_info.attributes.get(meth_name)
+        meth = class_info.attributes.get("main")
         if not isinstance(meth, objects.Method):
-            raise Exception(f"No such method: {meth_name}")
+            raise Exception(f"No main method on class {class_path}")
         if (
             not isinstance(meth.return_type, typesys.BottomType)
             or not meth.static
             or meth.parameter_types
         ):
-            raise Exception(f"Invalid signature for main method: {meth_name}")
+            raise Exception(
+                f"Invalid signature for main method on class {class_path}"
+            )
         assert isinstance(meth.type, typesys.Instance)
         main_name = get_class_method_impl_name(
-            self.type_ctx, typesys.Instance(cls_ty, []), meth_name
+            self.type_ctx, typesys.Instance(cls_ty, []), "main"
         )
         main_func = cnodes.CFunc(
             name="main",
