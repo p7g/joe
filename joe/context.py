@@ -24,26 +24,30 @@ class GlobalContext:
 
     def populate_from_modules(self, modules: t.List[ast.Module]):
         for module in modules:
-            classinfo = self._class_type(module)
-            self.type_ctx.add_class(classinfo)
+            child_type_ctx = self.type_ctx.new_child()
+            classinfos = self._class_type(child_type_ctx, module)
+            for classinfo in classinfos:
+                self.type_ctx.add_class(classinfo.id.name, classinfo)
 
-    def _class_type(self, mod: ast.Module) -> objects.ClassInfo:
+    def _class_type(self, child_type_ctx: "TypeContext", mod: ast.Module) -> t.List[objects.ClassInfo]:
         from joe.typevisitor import ClassDeclarationVisitor
 
-        child_type_ctx = self.type_ctx.new_child()
         for import_ in mod.imports:
             path = import_.path.value
             tycon = self.type_ctx.get_type_constructor(path)
             if tycon is None:
-                raise JoeNameError(import_.location, f"Unknown module {path}")
+                raise JoeNameError(import_.location, f"Unknown class {path}")
             classinfo = self.type_ctx.get_class_info(tycon)
             if classinfo is None:
                 raise JoeNameError(import_.location, f"Unknown class {path}")
-            child_type_ctx.add_class(classinfo)
+            child_type_ctx.add_class(classinfo.id.name.rsplit(".", 1)[-1], classinfo)
 
-        return ClassDeclarationVisitor.get_class_info(
-            child_type_ctx, mod.class_decl
-        )
+        decls = []
+        for class_decl in mod.class_decls:
+            ci = ClassDeclarationVisitor.get_class_info(child_type_ctx, class_decl)
+            decls.append(ci)
+            child_type_ctx.add_class(ci.id.name.rsplit(".", 1)[-1], ci)
+        return decls
 
 
 class TypeContext:
@@ -62,8 +66,8 @@ class TypeContext:
     def new_child(self) -> "TypeContext":
         return TypeContext(self._type_scope, self._classes_by_type)
 
-    def add_class(self, info: objects.ClassInfo) -> None:
-        self._type_scope[info.id.name] = info.type
+    def add_class(self, name: str, info: objects.ClassInfo) -> None:
+        self._type_scope[name] = info.type
         self._classes_by_type[info.type] = info
 
     def get_type_constructor(

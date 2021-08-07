@@ -74,7 +74,7 @@ class Import(Node):
 @dataclass
 class Module:
     name: str
-    class_decl: ClassDeclaration
+    class_decls: t.List[ClassDeclaration]
     imports: t.List[Import] = field(default_factory=list)
 
 

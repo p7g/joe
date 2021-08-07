@@ -28,10 +28,10 @@ class ModulePath(t.List[str]):
         return cls(path.split("."))
 
     def file_path(self) -> str:
-        *path, filename = self
+        *path, filename, cls_name = self
         return os.path.join(*path, f"{filename}{self.EXT}")
 
-    def class_path(self) -> str:
+    def dotted_path(self) -> str:
         return ".".join(self)
 
 
@@ -41,9 +41,12 @@ class _ParserSnapshot:
 
 
 class Parser:
-    def __init__(self, filename: str, contents: str):
+    def __init__(
+        self, filename: str, contents: str, seen_files: t.Set[str] = None
+    ):
         self.filename: t.Final = filename
         self.tokens = Peekable(lex(filename, contents))
+        self.seen_files = seen_files or set()
         self.modules: t.List[ast.Module] = []
 
     def _take_snapshot(self) -> _ParserSnapshot:
@@ -57,16 +60,25 @@ class Parser:
     def parse_file(self) -> t.List[ast.Module]:
         imports, modules = self._parse_imports()
 
-        final = False
-        if self.tokens.peek().type == TokenType.Final:
-            self.tokens.next()
-            final = True
-        class_decl = self._parse_class_decl(final=final)
+        class_decls = []
+        while True:
+            try:
+                self.tokens.peek()
+            except StopIteration:
+                break
+
+            final = False
+            if self.tokens.peek().type == TokenType.Final:
+                self.tokens.next()
+                final = True
+            class_decls.append(self._parse_class_decl(final=final))
 
         modules.append(
             ast.Module(
-                name=ModulePath.from_file_path(self.filename).class_path(),
-                class_decl=class_decl,
+                name=ModulePath.from_file_path(self.filename)
+                .dotted_path()
+                .rsplit(".", 1)[0],
+                class_decls=class_decls,
                 imports=imports,
             )
         )
@@ -97,9 +109,16 @@ class Parser:
                 )
             )
             import_filename = ModulePath.from_class_path(path).file_path()
+            if import_filename in self.seen_files:
+                continue
+            self.seen_files.add(import_filename)
             with open(import_filename, "r") as f:
                 import_src = f.read()
-            modules.extend(Parser(import_filename, import_src).parse_file())
+            modules.extend(
+                Parser(
+                    import_filename, import_src, self.seen_files
+                ).parse_file()
+            )
 
         return imports, modules
 
@@ -119,8 +138,14 @@ class Parser:
         fields, methods = self._parse_methods_and_fields(class_name)
         self.tokens.next().expect(TokenType.RBrace)
 
+        fully_qualified_name = ModulePath.from_file_path(self.filename)
+        fully_qualified_name.append(class_name)
+
         return ast.ClassDeclaration(
-            name=ast.Name(value=class_name, location=name_tok.location),
+            name=ast.Name(
+                value=fully_qualified_name.dotted_path(),
+                location=name_tok.location,
+            ),
             superclass=superclass,
             fields=fields,
             methods=methods,

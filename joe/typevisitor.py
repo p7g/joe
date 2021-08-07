@@ -85,7 +85,7 @@ class ClassDeclarationVisitor(Visitor):
 
         self.ty.final = node.final
         # Add current class to scope after resolving superclass (avoid cycle)
-        self.type_ctx.add_class(self.ty)
+        self.type_ctx.add_class(node.name.value, self.ty)
         super().visit_ClassDeclaration(node)
 
     def visit_Field(self, node: ast.Field):
