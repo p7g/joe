@@ -391,12 +391,11 @@ class CompileVisitor(Visitor):
         class_type_name = get_type_name(self.type_ctx, obj_ty)
 
         vtable_ctype = self._make_vtable_type(class_info)
-        # vtable_elements: t.List[cnodes.CExpr] = []
-        seen_methods = set()
         if class_info.superclass is not None:
             # Recursively populate `parent` structs for the chain of classes
             # (using `class_info.get_attribute(name)` to get the top-most
             # implementation)
+            seen_methods = set()
             expr: t.Optional[cnodes.CArrayLiteral] = None
             for parent in reversed(list(class_info.hierarchy())):
                 if expr is not None:
@@ -448,16 +447,31 @@ class CompileVisitor(Visitor):
                         )
                     expr.elements.append(func_expr)
 
-            self.ctx.code_unit.variables.append(
-                cnodes.CVarDecl(
-                    name=get_class_vtable_name(
-                        self.type_ctx,
-                        typesys.Instance(class_info.type, []),
-                    ),
-                    type=vtable_ctype,
-                    value=expr,
-                )
+            vtable_expr = expr
+        else:
+            vtable_expr = cnodes.CArrayLiteral(
+                elements=[
+                    cnodes.CVariable(
+                        get_class_method_impl_name(
+                            self.type_ctx,
+                            typesys.Instance(class_info.type, []),
+                            meth_name,
+                        )
+                    )
+                    for meth_name, meth in class_info.methods()
+                    if not meth.static
+                ]
             )
+
+        self.ctx.code_unit.variables.append(
+            cnodes.CVarDecl(
+                name=get_class_vtable_name(
+                    self.type_ctx, typesys.Instance(class_info.type, [])
+                ),
+                type=vtable_ctype,
+                value=vtable_expr,
+            )
+        )
 
         if class_info.final:
             # When a final class is used as a value of its own type, there is
