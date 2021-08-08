@@ -12,12 +12,16 @@ click==8.0.1
     # via
     #   black
     #   pip-tools
+jedi==0.18.0
+    # via -r requirements.in
 mypy-extensions==0.4.3
     # via
     #   black
     #   mypy
-mypy==0.902
+mypy==0.910
     # via -r requirements.in
+parso==0.8.2
+    # via jedi
 pathspec==0.8.1
     # via black
 patina==0.3.1
