@@ -93,18 +93,18 @@ def get_ctype(ctx: TypeContext, typ: typesys.Type) -> cnodes.CType:
         return cnodes.CNamedType("double")
     elif isinstance(typ, typesys.BottomType):
         return cnodes.CNamedType("void")
-    elif (
-        isinstance(typ, typesys.Instance)
-        and not typ.type_constructor.is_function
-    ):
-        return cnodes.CNamedType(get_type_name(ctx, typ))
-    elif isinstance(typ, typesys.Instance) and typ.type_constructor.is_function:
-        return cnodes.CFuncType(
-            return_type=get_ctype(ctx, typ.arguments[-1]),
-            parameter_types=[get_ctype(ctx, p) for p in typ.arguments[:-1]],
-        )
-    else:
-        raise NotImplementedError(typ)
+    elif isinstance(typ, typesys.Instance):
+        if typ.type_constructor.is_function:
+            return cnodes.CFuncType(
+                return_type=get_ctype(ctx, typ.arguments[-1]),
+                parameter_types=[get_ctype(ctx, p) for p in typ.arguments[:-1]],
+            )
+        elif typ.type_constructor == Arrays.get_type_constructor():
+            ctx.add_array_type(typ)
+            return cnodes.CStructType(get_array_name(ctx, typ))
+        else:
+            return cnodes.CNamedType(get_type_name(ctx, typ))
+    raise NotImplementedError(typ)
 
 
 def get_obj_class_info(
@@ -156,10 +156,11 @@ def get_struct_field(
 def get_object_data(
     ctx: TypeContext, obj: cnodes.CExpr, obj_ty: typesys.Instance
 ) -> cnodes.CExpr:
-    ci = ctx.get_class_info(obj_ty.type_constructor)
-    assert ci is not None
-    if ci.final:
-        return obj
+    if not is_array_type(obj_ty):
+        ci = ctx.get_class_info(obj_ty.type_constructor)
+        assert ci is not None
+        if ci.final:
+            return obj
     return get_struct_field(obj, "data")
 
 
@@ -237,7 +238,7 @@ def get_array_element(
     expr: cnodes.CExpr, index: cnodes.CExpr
 ) -> cnodes.CAssignmentTarget:
     return cnodes.CArrayIndex(
-        array_value=get_struct_field(expr, "elements"),
+        array_value=get_struct_field(expr, "data"),
         index_value=index,
     )
 
@@ -276,7 +277,7 @@ def make_array_struct(
         get_array_name(ctx, array_ty),
         fields=[
             cnodes.CStructField(
-                name="elements",
+                name="data",
                 type=get_ctype(ctx, array_ty.arguments[0]).as_pointer(),
             ),
             cnodes.CStructField(
@@ -287,15 +288,17 @@ def make_array_struct(
     )
 
 
-def make_malloc(type_: cnodes.CType) -> cnodes.CExpr:
+def make_malloc(type_: cnodes.CType, n: cnodes.CExpr = None) -> cnodes.CExpr:
+    size_of_type = cnodes.CCallExpr(
+        target=cnodes.CVariable("sizeof"),
+        arguments=[cnodes.CTypeExpr(type_)],
+    )
+    expr: cnodes.CExpr = size_of_type
+    if n is not None:
+        expr = cnodes.CBinExpr(size_of_type, n, cnodes.BinOp.Multiply)
     return cnodes.CCallExpr(
         target=cnodes.CVariable("malloc"),
-        arguments=[
-            cnodes.CCallExpr(
-                target=cnodes.CVariable("sizeof"),
-                arguments=[cnodes.CTypeExpr(type_)],
-            ),
-        ],
+        arguments=[expr],
     )
 
 
@@ -351,17 +354,7 @@ def cast_as_parent(
 class CompileContext:
     def __init__(self, global_ctx: GlobalContext) -> None:
         self.global_ctx = global_ctx
-        self.emitted_arrays: t.Set[typesys.Type] = set()
         self.code_unit = cnodes.CCodeUnit()
-
-
-def emit_array(ctx: CompileContext, array_ty: typesys.Type) -> None:
-    assert is_array_type(array_ty)
-    if array_ty.arguments[0] in ctx.emitted_arrays:
-        return
-    array_struct = make_array_struct(ctx.global_ctx.type_ctx, array_ty)
-    ctx.code_unit.structs.append(array_struct)
-    ctx.emitted_arrays.add(array_ty.arguments[0])
 
 
 class CompileVisitor(Visitor):
@@ -373,6 +366,12 @@ class CompileVisitor(Visitor):
     @property
     def type_ctx(self) -> TypeContext:
         return self.ctx.global_ctx.type_ctx
+
+    def add_array_structs(self) -> None:
+        for array_ty in self.type_ctx._used_array_types:
+            assert is_array_type(array_ty)
+            struct = make_array_struct(self.type_ctx, array_ty)
+            self.ctx.code_unit.structs.append(struct)
 
     def visit_ClassDeclaration(self, node: ast.ClassDeclaration) -> None:
         class_ty = self.type_ctx.get_type_constructor(node.name.value)
@@ -540,8 +539,6 @@ class CompileVisitor(Visitor):
             )
 
         for name, field in ci.fields():
-            if is_array_type(field.type):
-                emit_array(self.ctx, field.type)
             data_ctype.fields.append(
                 cnodes.CStructField(
                     name=escape_attribute_name(name),
@@ -572,12 +569,6 @@ class CompileVisitor(Visitor):
             )
 
         for name, method in ci.methods():
-            if is_array_type(method.return_type):
-                emit_array(self.ctx, method.return_type)
-            for param in method.parameter_types:
-                if is_array_type(param):
-                    emit_array(self.ctx, param)
-
             if not method.static and not method.override:
                 meth_cty = get_ctype(self.type_ctx, method.type)
                 assert isinstance(meth_cty, cnodes.CFuncType)
@@ -770,10 +761,13 @@ class MethodCompiler(ScopeVisitor):
         assert isinstance(obj, cnodes.CAssignmentTarget)
         ty = self.get_node_type(node.expr)
         assert isinstance(ty, typesys.Instance)
-        ci = get_obj_class_info(self.type_ctx, ty)
-        if optimize_single_field(ci):
-            # No extra allocation for the data
-            return
+
+        if not is_array_type(ty):
+            ci = get_obj_class_info(self.type_ctx, ty)
+            if optimize_single_field(ci):
+                # No extra allocation for the data
+                return
+
         self.cfunction.unwrap().body.append(
             make_free(get_object_data(self.type_ctx, obj, ty))
         )
@@ -1013,10 +1007,34 @@ class MethodCompiler(ScopeVisitor):
         obj_ty = self.get_node_type(node)
         obj_var = self.new_variable(obj_ty)
         assert isinstance(obj_ty, typesys.Instance)
+
+        cfunc = self.cfunction.unwrap()
+
+        if is_array_type(obj_ty):
+            assert isinstance(node.type, ast.ArrayType)
+            assert node.type.length is not None
+            dest = get_object_data(self.type_ctx, obj_var, obj_ty)
+            assert isinstance(dest, cnodes.CAssignmentTarget)
+            self.visit_Expr(node.type.length)
+            cfunc.body.extend([
+                make_assign_stmt(
+                    dest=get_struct_field(obj_var, "length"),
+                    value=self.last_expr.take().unwrap(),
+                ),
+                make_assign_stmt(
+                    dest=dest,
+                    value=make_malloc(
+                        get_ctype(self.type_ctx, obj_ty.arguments[0]),
+                        get_struct_field(obj_var, "length"),
+                    ),
+                ),
+            ])
+            self.last_expr.replace(obj_var)
+            return
+
         class_info = self.type_ctx.get_class_info(obj_ty.type_constructor)
         assert class_info is not None
 
-        cfunc = self.cfunction.unwrap()
         dest = get_object_data(self.type_ctx, obj_var, obj_ty)
 
         if not optimize_single_field(class_info):

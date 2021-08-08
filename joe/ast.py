@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import typing as t
 from dataclasses import dataclass, field
 
@@ -32,6 +34,7 @@ class VoidType(Type):
 @dataclass(eq=False)
 class ArrayType(Type):
     element_type: Type
+    length: t.Optional[Expr]
 
 
 @dataclass(eq=False)

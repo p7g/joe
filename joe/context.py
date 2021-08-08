@@ -62,6 +62,7 @@ class TypeContext:
         self._classes_by_type: t.MutableMapping[
             typesys.TypeConstructor, objects.ClassInfo
         ] = t.ChainMap(class_infos)
+        self._used_array_types: t.List[typesys.Type] = []
 
     def new_child(self) -> "TypeContext":
         return TypeContext(self._type_scope, self._classes_by_type)
@@ -69,6 +70,12 @@ class TypeContext:
     def add_class(self, name: str, info: objects.ClassInfo) -> None:
         self._type_scope[name] = info.type
         self._classes_by_type[info.type] = info
+
+    def add_array_type(self, ty: typesys.Type) -> None:
+        # FIXME: __hash__ for types
+        if any(t == ty for t in self._used_array_types):
+            return
+        self._used_array_types.append(ty)
 
     def get_type_constructor(
         self, name: str

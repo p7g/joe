@@ -222,8 +222,13 @@ class Parser:
         )
         while self.tokens.peek().type == TokenType.LBracket:
             self.tokens.next()
+            length = None
+            if self.tokens.peek().type != TokenType.RBracket:
+                length = self._parse_expr()
             self.tokens.next().expect(TokenType.RBracket)
-            ty = ast.ArrayType(location=ty.location, element_type=ty)
+            ty = ast.ArrayType(
+                location=ty.location, element_type=ty, length=length
+            )
         return ty
 
     def _parse_parameter(self) -> ast.Parameter:
@@ -328,13 +333,14 @@ class Parser:
         elif tok.type == TokenType.New:
             new_tok = tok
             ty = self._parse_type()
-            self.tokens.next().expect(TokenType.LParen)
             args = []
-            while self.tokens.peek().type != TokenType.RParen:
-                args.append(self._parse_expr())
-                if self.tokens.peek().type != TokenType.RParen:
-                    self.tokens.next().expect(TokenType.Comma)
-            self.tokens.next().expect(TokenType.RParen)
+            if not isinstance(ty, ast.ArrayType):
+                self.tokens.next().expect(TokenType.LParen)
+                while self.tokens.peek().type != TokenType.RParen:
+                    args.append(self._parse_expr())
+                    if self.tokens.peek().type != TokenType.RParen:
+                        self.tokens.next().expect(TokenType.Comma)
+                self.tokens.next().expect(TokenType.RParen)
             return ast.NewExpr(
                 location=new_tok.location, type=ty, arguments=args
             )
@@ -343,4 +349,6 @@ class Parser:
         elif tok.type == TokenType.This:
             return ast.ThisExpr(location=tok.location)
         else:
-            raise NotImplementedError(tok)
+            raise JoeSyntaxError(
+                tok.location, f"Unexpected token {tok.type.value}"
+            )

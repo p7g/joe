@@ -48,6 +48,8 @@ class Visitor:
 
     def visit_ArrayType(self, node: ast.ArrayType):
         self.visit_Type(node.element_type)
+        if node.length is not None:
+            self.visit_Expr(node.length)
 
     def visit_Field(self, node: ast.Field):
         self.visit_Name(node.name)
@@ -110,6 +112,7 @@ class Visitor:
         self.visit_Expr(node.value)
 
     def visit_NewExpr(self, node: ast.NewExpr):
+        self.visit_Type(node.type)
         for arg in node.arguments:
             self.visit_Expr(arg)
 

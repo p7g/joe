@@ -43,6 +43,7 @@ def main() -> int:
     for mod in mods:
         for class_decl in mod.class_decls:
             vis.visit(class_decl)
+    vis.add_array_structs()
     if main_name:
         vis.compile_main_function(main_name)
 

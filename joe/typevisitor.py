@@ -9,6 +9,11 @@ from joe.visitor import Visitor
 from joe.scopevisitor import ScopeVisitor
 
 
+def _check_ignored_length(ty: ast.Type) -> None:
+    if isinstance(ty, ast.ArrayType) and ty.length is not None:
+        Diagnostic.ignored_array_type_length(location=ty.location)
+
+
 class TypeVisitor(Visitor):
     """Analyzes type expressions and results in typesys types."""
 
@@ -99,6 +104,7 @@ class ClassDeclarationVisitor(Visitor):
             Diagnostic.hidden_field(
                 node.name.value, self.ty.id.name, location=node.location
             )
+        _check_ignored_length(node.type)
         self.ty.attributes[node.name.value] = objects.Field(
             self.analyze_type(node.type),
             self.ty,
@@ -116,6 +122,9 @@ class ClassDeclarationVisitor(Visitor):
             raise JoeSyntaxError(
                 node.location, "Constructor must have void return type"
             )
+        _check_ignored_length(node.return_type)
+        for param in node.parameters:
+            _check_ignored_length(param.type)
         # TODO: Ensure that this doesn't override a final method
         meth_ty = typesys.Instance(
             function_type(len(node.parameters)),
@@ -327,6 +336,26 @@ class MethodExprTypeVisitor(ScopeVisitor):
         created_type = self.analyze_type(node.type)
         # FIXME: use some resolve_type method to handle type variables
         assert isinstance(created_type, typesys.Instance)
+
+        if created_type.type_constructor == Arrays.get_type_constructor():
+            assert isinstance(node.type, ast.ArrayType)
+            if node.type.length is None:
+                raise JoeSyntaxError(
+                    node.type.location,
+                    "Array length must be specified in new expression",
+                )
+            length_type = self.get_type(node.type.length)
+            assert isinstance(length_type, typesys.Instance)
+            if (
+                length_type.type_constructor
+                != self.type_ctx.get_type_constructor("int")
+            ):
+                raise JoeTypeError(
+                    node.type.length.location, "Array length must be an integer"
+                )
+            self.set_type(node, created_type)
+            return
+
         class_info = self.type_ctx.get_class_info(created_type.type_constructor)
         if class_info is None:
             raise JoeTypeError(
@@ -540,7 +569,7 @@ class MethodExprTypeVisitor(ScopeVisitor):
 
         tycon = expr_ty.type_constructor
         class_info = self.type_ctx.get_class_info(tycon)
-        if class_info is None:
+        if class_info is None and tycon != Arrays.get_type_constructor():
             raise JoeTypeError(
                 node.expr.location, "Can't delete primitive value"
             )
@@ -548,6 +577,7 @@ class MethodExprTypeVisitor(ScopeVisitor):
     def visit_VarDeclaration(self, node: ast.VarDeclaration):
         super().visit_VarDeclaration(node)
 
+        _check_ignored_length(node.type)
         actual_name = self.resolve_name(node.name.value, location=node.location)
         local_type = self.analyze_type(node.type)
         self.locals[actual_name] = _Local(
