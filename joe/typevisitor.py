@@ -99,13 +99,14 @@ class ClassDeclarationVisitor(Visitor):
                 node.location, f"Duplicate attribute name '{node.name.value}'"
             )
         elif node.name.value in [
-            name for name, _attr in self.ty.all_attributes()
+            attr.name for attr in self.ty.all_attributes()
         ]:
             Diagnostic.hidden_field(
                 node.name.value, self.ty.id.name, location=node.location
             )
         _check_ignored_length(node.type)
         self.ty.attributes[node.name.value] = objects.Field(
+            node.name.value,
             self.analyze_type(node.type),
             self.ty,
             final=node.final,
@@ -146,6 +147,7 @@ class ClassDeclarationVisitor(Visitor):
                     node.location, "Incompatible method override"
                 )
         self.ty.attributes[node.name.value] = objects.Method(
+            node.name.value,
             meth_ty,
             self.ty,
             static=node.static,

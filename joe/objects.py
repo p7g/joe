@@ -29,35 +29,35 @@ class ClassInfo:
     def field_count(self) -> int:
         return len(tuple(self.fields()))
 
-    def methods(self) -> t.Generator[tuple[str, Method], None, None]:
-        for name, attr in self.attributes.items():
+    def methods(self) -> t.Generator[Method, None, None]:
+        for attr in self.attributes.values():
             if isinstance(attr, Method):
-                yield name, attr
+                yield attr
 
-    def fields(self) -> t.Generator[tuple[str, Field], None, None]:
-        for name, attr in self.attributes.items():
+    def fields(self) -> t.Generator[Field, None, None]:
+        for attr in self.attributes.values():
             if isinstance(attr, Field):
-                yield name, attr
+                yield attr
 
     def all_attributes(
         self,
-    ) -> t.Generator[tuple[str, "Attribute"], None, None]:
-        yield from self.attributes.items()
+    ) -> t.Generator[Attribute, None, None]:
+        yield from self.attributes.values()
         if not self.superclass:
             return
         seen = set(self.attributes)
-        for name, attr in self.superclass.all_attributes():
-            if name in seen:
+        for attr in self.superclass.all_attributes():
+            if attr.name in seen:
                 continue
-            seen.add(name)
-            yield name, attr
+            seen.add(attr.name)
+            yield attr
 
     def has_attribute(self, name: str) -> bool:
-        return name in [name for name, _attr in self.all_attributes()]
+        return name in [attr.name for attr in self.all_attributes()]
 
     def get_attribute(self, name: str) -> t.Optional["Attribute"]:
         return next(
-            (attr for name2, attr in self.all_attributes() if name == name2),
+            (attr for attr in self.all_attributes() if attr.name == name),
             None,
         )
 
@@ -72,7 +72,8 @@ class ClassInfo:
 class Attribute:
     """Method or field"""
 
-    def __init__(self, type_: typesys.Type, ci: ClassInfo) -> None:
+    def __init__(self, name: str, type_: typesys.Type, ci: ClassInfo) -> None:
+        self.name = name
         self.type = type_
         self.class_info = ci
 
@@ -80,13 +81,14 @@ class Attribute:
 class Method(Attribute):
     def __init__(
         self,
+        name: str,
         type_: typesys.Type,
         ci: ClassInfo,
         static: bool,
         final: bool,
         overrides: Method | None,
     ) -> None:
-        super().__init__(type_, ci)
+        super().__init__(name, type_, ci)
         self.static = static
         self.final = final
         self.overrides = overrides
@@ -113,6 +115,6 @@ class Method(Attribute):
 
 
 class Field(Attribute):
-    def __init__(self, type_: typesys.Type, ci: ClassInfo, final: bool) -> None:
-        super().__init__(type_, ci)
+    def __init__(self, name: str, type_: typesys.Type, ci: ClassInfo, final: bool) -> None:
+        super().__init__(name, type_, ci)
         self.final = final

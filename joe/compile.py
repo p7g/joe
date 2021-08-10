@@ -187,7 +187,7 @@ def optimize_single_field(ci: objects.ClassInfo) -> bool:
         ci.final
         and ci.field_count == 1
         and not ci.superclass
-        and next(ci.fields())[1].final
+        and next(ci.fields()).final
     )
 
 
@@ -199,19 +199,15 @@ def get_class_field(
 ) -> cnodes.CExpr:
     ci = get_obj_class_info(ctx, obj_ty)
     if optimize_single_field(ci):
-        expected_name, only_field = next(ci.fields())
-        assert name == expected_name
+        only_field = next(ci.fields())
+        assert name == only_field.name
         data = get_object_data(ctx, obj, obj_ty)
         if only_field.final:
             return data
         else:
             return cnodes.CArrayIndex(data, cnodes.CInteger(0))
 
-    attr = next(
-        attr
-        for name2, attr in get_obj_class_info(ctx, obj_ty).all_attributes()
-        if name2 == name
-    )
+    attr = get_obj_class_info(ctx, obj_ty).get_attribute(name)
     assert isinstance(attr, objects.Field)
 
     data2, _vtable = cast_as_parent(
@@ -359,10 +355,10 @@ def cast_as_parent(
 
 class CompileContext:
     def __init__(
-        self, global_ctx: GlobalContext, code_unit: cnodes.CCodeUnit = None
+        self, global_ctx: GlobalContext, code_unit: cnodes.CCodeUnit
     ) -> None:
         self.global_ctx = global_ctx
-        self.code_unit = code_unit or cnodes.CCodeUnit()
+        self.code_unit = cnodes.CCodeUnit()
 
     @property
     def types(self) -> TypeContext:
@@ -395,7 +391,6 @@ class MethodCompileContext:
     def __init__(
         self,
         class_compile_context: ClassCompileContext,
-        method_name: str,
         method: objects.Method,
         cfunc: cnodes.CFunc,
         method_type_visitor: MethodExprTypeVisitor,
@@ -403,7 +398,6 @@ class MethodCompileContext:
         node: ast.Method,
     ) -> None:
         self.class_compile_context = class_compile_context
-        self.method_name = method_name
         self.method = method
         self.cfunc = cfunc
         self.method_type_visitor = method_type_visitor
@@ -433,7 +427,7 @@ class MethodCompileContext:
 
 class CompileVisitor(Visitor):
     def __init__(self, ctx: GlobalContext) -> None:
-        self.ctx = CompileContext(ctx)
+        self.ctx = CompileContext(ctx, cnodes.CCodeUnit())
         self.ctx.code_unit.includes.append("stdlib.h")
 
     def add_array_structs(self) -> None:
@@ -457,7 +451,7 @@ class CompileVisitor(Visitor):
         if cls_ty is None or class_info is None:
             # FIXME: Another exception type?
             raise Exception(f"Invalid class for main method: {class_path}")
-        meth = class_info.attributes.get("main")
+        meth = class_info.get_attribute("main")
         if not isinstance(meth, objects.Method):
             raise Exception(f"No main method on class {class_path}")
         if (
@@ -532,22 +526,22 @@ class ClassCompiler(Visitor):
                 else:
                     expr = cnodes.CArrayLiteral([])
 
-                for meth_name, parent_method in parent.methods():
+                for parent_method in parent.methods():
                     if (
                         parent_method.final
                         or parent_method.static
-                        or meth_name in seen_methods
+                        or parent_method.name in seen_methods
                     ):
                         continue
-                    seen_methods.add(meth_name)
+                    seen_methods.add(parent_method.name)
 
-                    meth = class_info.get_attribute(meth_name)
+                    meth = class_info.get_attribute(parent_method.name)
                     assert isinstance(meth, objects.Method)
 
                     impl_name = get_class_method_impl_name(
                         self.type_ctx,
                         typesys.Instance(meth.class_info.type, []),
-                        meth_name,
+                        parent_method.name,
                     )
 
                     func_expr: cnodes.CExpr = cnodes.CVariable(impl_name)
@@ -584,10 +578,10 @@ class ClassCompiler(Visitor):
                         get_class_method_impl_name(
                             self.type_ctx,
                             typesys.Instance(class_info.type, []),
-                            meth_name,
+                            meth.name,
                         )
                     )
-                    for meth_name, meth in class_info.methods()
+                    for meth in class_info.methods()
                     if not meth.static
                 ]
             )
@@ -634,8 +628,8 @@ class ClassCompiler(Visitor):
 
     def _make_data_type(self, ci: objects.ClassInfo) -> cnodes.CType:
         if optimize_single_field(ci):
-            _name, field = next(ci.fields())
-            field_type = get_ctype(self.type_ctx, next(ci.fields())[1].type)
+            field = next(ci.fields())
+            field_type = get_ctype(self.type_ctx, field.type)
             # If a field is final it can't be reassigned, so there's no need to
             # put it behind a pointer.
             if field.final:
@@ -666,10 +660,10 @@ class ClassCompiler(Visitor):
                 )
             )
 
-        for name, field in ci.fields():
+        for field in ci.fields():
             data_ctype.fields.append(
                 cnodes.CStructField(
-                    name=escape_attribute_name(name),
+                    name=escape_attribute_name(field.name),
                     type=get_ctype(self.type_ctx, field.type),
                 )
             )
@@ -696,7 +690,7 @@ class ClassCompiler(Visitor):
                 )
             )
 
-        for name, method in ci.methods():
+        for method in ci.methods():
             if not method.static and not method.override:
                 meth_cty = get_ctype(self.type_ctx, method.type)
                 assert isinstance(meth_cty, cnodes.CFuncType)
@@ -706,7 +700,7 @@ class ClassCompiler(Visitor):
                 )
                 vtable_ctype.fields.append(
                     cnodes.CStructField(
-                        name=escape_attribute_name(name), type=meth_cty
+                        name=escape_attribute_name(method.name), type=meth_cty
                     )
                 )
 
@@ -727,7 +721,7 @@ class ClassCompiler(Visitor):
             name=get_class_method_impl_name(
                 self.ctx.types,
                 typesys.Instance(class_ty.type, []),
-                node.name.value,
+                meth.name,
             ),
             return_type=get_ctype(self.ctx.types, meth.return_type),
             parameters=[
@@ -747,7 +741,7 @@ class ClassCompiler(Visitor):
             body=[],
         )
 
-        is_constructor = node.name.value == class_ty.id.name.rsplit(".", 1)[-1]
+        is_constructor = meth.name == class_ty.id.name.rsplit(".", 1)[-1]
         if not node.static:
             self_type: cnodes.CType = get_ctype(
                 self.type_ctx, typesys.Instance(class_ty.type, [])
@@ -760,7 +754,6 @@ class ClassCompiler(Visitor):
 
         ctx = MethodCompileContext(
             self.ctx,
-            node.name.value,
             meth,
             cfunc,
             method_type_visitor=method_type_visitor,
