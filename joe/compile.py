@@ -140,6 +140,28 @@ def get_class_method(
         )
 
 
+def obj_as_parent(
+    type_ctx: TypeContext,
+    class_info: objects.ClassInfo,
+    parent_class_info: objects.ClassInfo,
+    obj: cnodes.CExpr,
+) -> cnodes.CExpr:
+    return make_struct_literal(
+        get_ctype(
+            type_ctx,
+            typesys.Instance(parent_class_info.type, []),
+        ),
+        list(
+            cast_as_parent(
+                type_ctx,
+                obj,
+                typesys.Instance(class_info.type, []),
+                parent_class_info,
+            )
+        ),
+    )
+
+
 def get_self(
     class_info: objects.ClassInfo, is_constructor: bool
 ) -> cnodes.CAssignmentTarget:
@@ -823,6 +845,8 @@ class MethodCompiler(ScopeVisitor):
         return ExprCompiler.compile(self.ctx, expr)
 
     def visit_ExprStmt(self, node: ast.ExprStmt) -> None:
+        super().visit_ExprStmt(node)
+
         self.ctx.cfunc.body.append(
             cnodes.CExprStmt(
                 cnodes.CCast(
@@ -833,6 +857,8 @@ class MethodCompiler(ScopeVisitor):
         )
 
     def visit_DeleteStmt(self, node: ast.DeleteStmt) -> None:
+        super().visit_DeleteStmt(node)
+
         # Free the data member of the object
         obj = self.compile_expr(node.expr)
         assert isinstance(obj, cnodes.CAssignmentTarget)
@@ -850,15 +876,36 @@ class MethodCompiler(ScopeVisitor):
         )
 
     def visit_ReturnStmt(self, node: ast.ReturnStmt) -> None:
+        super().visit_ReturnStmt(node)
+
         expr = None if node.expr is None else self.compile_expr(node.expr)
         self.ctx.cfunc.body.append(cnodes.CReturnStmt(expr))
 
     def visit_VarDeclaration(self, node: ast.VarDeclaration) -> None:
+        super().visit_VarDeclaration(node)
+
         if node.initializer is None:
             return
 
         dest_name = self.resolve_name(node.name.value, location=node.location)
         value = self.compile_expr(node.initializer)
+
+        src_type = self.get_node_type(node.initializer)
+        dest_type = self.get_node_type(node)
+
+        assert isinstance(dest_type, typesys.Instance)
+        assert isinstance(src_type, typesys.Instance)
+
+        src_ci = self.type_ctx.get_class_info(src_type.type_constructor)
+        dest_ci = self.type_ctx.get_class_info(dest_type.type_constructor)
+        if src_ci is not None:
+            assert dest_ci is not None
+            value = obj_as_parent(
+                self.type_ctx,
+                src_ci,
+                dest_ci,
+                self.cache_in_local(value, src_type),
+            )
 
         assign_stmt = make_assign_stmt(
             cnodes.CVariable(get_local_name(dest_name)), value
@@ -1031,9 +1078,28 @@ class ExprCompiler(Visitor):
 
             args.append(receiver)
 
-        for arg in node.arguments:
+        for param, arg in zip(meth_info.parameter_types, node.arguments):
             self.visit_Expr(arg)
-            args.append(self.last_expr.take().unwrap())
+            value = self.last_expr.take().unwrap()
+
+            src_type = self.get_node_type(arg)
+            dest_type = param
+
+            assert isinstance(dest_type, typesys.Instance)
+            assert isinstance(src_type, typesys.Instance)
+
+            src_ci = self.type_ctx.get_class_info(src_type.type_constructor)
+            dest_ci = self.type_ctx.get_class_info(dest_type.type_constructor)
+            if src_ci is not None:
+                assert dest_ci is not None
+                value = obj_as_parent(
+                    self.type_ctx,
+                    src_ci,
+                    dest_ci,
+                    self.cache_in_local(value, src_type),
+                )
+
+            args.append(value)
 
         result = self.cache_in_local(
             cnodes.CCallExpr(target, args), self.get_node_type(node)
@@ -1046,6 +1112,24 @@ class ExprCompiler(Visitor):
         assert isinstance(dest, cnodes.CAssignmentTarget)
         self.visit_Expr(node.value)
         value = self.last_expr.take().unwrap()
+
+        src_type = self.get_node_type(node.value)
+        dest_type = self.get_node_type(node.target)
+
+        assert isinstance(dest_type, typesys.Instance)
+        assert isinstance(src_type, typesys.Instance)
+
+        src_ci = self.type_ctx.get_class_info(src_type.type_constructor)
+        dest_ci = self.type_ctx.get_class_info(dest_type.type_constructor)
+        if src_ci is not None:
+            assert dest_ci is not None
+            value = obj_as_parent(
+                self.type_ctx,
+                src_ci,
+                dest_ci,
+                self.cache_in_local(value, src_type),
+            )
+
         self.last_expr.replace(cnodes.CAssignmentExpr(dest, value))
 
     def visit_PlusExpr(self, node: ast.PlusExpr) -> None:
@@ -1207,19 +1291,13 @@ class ExprCompiler(Visitor):
 
     def visit_SuperExpr(self, node: ast.SuperExpr) -> None:
         assert self.ctx.class_info.superclass is not None
-        this_as_parent = make_struct_literal(
-            get_ctype(
-                self.type_ctx,
-                typesys.Instance(self.ctx.class_info.superclass.type, []),
-            ),
-            list(
-                cast_as_parent(
-                    self.type_ctx,
-                    get_self(self.ctx.class_info, self.ctx.is_constructor),
-                    typesys.Instance(self.ctx.class_info.type, []),
-                    self.ctx.class_info.superclass,
-                )
-            ),
+        # FIXME: What if the method called is not on the direct superclass but a
+        # class higher in the hierarchy?
+        this_as_parent = obj_as_parent(
+            self.type_ctx,
+            self.ctx.class_info,
+            self.ctx.class_info.superclass,
+            get_self(self.ctx.class_info, self.ctx.is_constructor),
         )
         # For calling `super()`
         self.last_expr.replace(

@@ -585,6 +585,7 @@ class MethodExprTypeVisitor(ScopeVisitor):
         self.locals[actual_name] = _Local(
             actual_name=actual_name, type=local_type
         )
+        self.set_type(node, local_type)
 
         if node.initializer is not None:
             init_type = self.get_type(node.initializer)
