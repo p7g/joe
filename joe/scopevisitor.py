@@ -9,6 +9,11 @@ from joe.source import JoeNameError, JoeSyntaxError, Location
 from joe.visitor import Visitor
 
 
+def escape_name(name: str, *, discriminator: int = 0) -> str:
+    n_str = "" if discriminator == 0 else str(discriminator)
+    return f"L{len(name)}{name}{n_str}"
+
+
 class ScopeVisitor(Visitor):
     def __init__(self):
         super().__init__()
@@ -32,10 +37,9 @@ class ScopeVisitor(Visitor):
         if (self._scope_level, name) in self._names:
             raise JoeSyntaxError(location, f"{name} has already been declared")
         n = self._name_occurrences[name]
-        n_str = "" if n == 0 else str(n)
         self._name_occurrences[name] += 1
 
-        escaped_name = f"L{len(name)}{name}{n_str}"
+        escaped_name = escape_name(name, discriminator=n)
         self._names[self._scope_level, name] = escaped_name
         return escaped_name
 
