@@ -3,6 +3,7 @@ import typing as t
 from dataclasses import dataclass
 from joe import ast, objects, typesys
 from joe.context import TypeContext
+from joe.exc import JoeUnreachable
 from joe.diagnostics import Diagnostic
 from joe.source import JoeNameError, JoeSyntaxError, JoeTypeError, Location
 from joe.visitor import Visitor
@@ -241,6 +242,9 @@ class MethodExprTypeVisitor(ScopeVisitor):
         ty = self.expr_types[node]
         return ty
 
+    def try_get_type(self, node: ast.Node) -> t.Optional[typesys.Type]:
+        return self.expr_types.get(node)
+
     def resolve_local(self, name: str, *, location: Location) -> _Local:
         actual_name = self.resolve_name(name, location=location)
         if actual_name in self.locals:
@@ -413,14 +417,35 @@ class MethodExprTypeVisitor(ScopeVisitor):
         except JoeNameError:
             attr = self.class_.get_attribute(name_str)
             if attr is None:
-                raise
+                tycon = self.type_ctx.get_type_constructor(name_str)
+                if tycon is None or self.type_ctx.get_class_info(tycon) is None:
+                    raise
+                return  # No type for classes
             ty = attr.type
         self.set_type(node, ty)
 
     def visit_DotExpr(self, node: ast.DotExpr):
         # TODO: Support static methods
         super().visit_DotExpr(node)
-        lhs_ty = self.get_type(node.left)
+        lhs_ty = self.try_get_type(node.left)
+        if lhs_ty is None and isinstance(node.left, ast.IdentExpr):
+            # Static attribute access
+            tycon = self.type_ctx.get_type_constructor(node.left.name)
+            assert tycon is not None
+            class_info = self.type_ctx.get_class_info(tycon)
+            assert class_info is not None
+            attr = class_info.get_attribute(node.name)
+            if (
+                attr is None
+                or not isinstance(attr, objects.Method)
+                or not attr.static
+            ):
+                raise JoeNameError(
+                    node.location,
+                    f"No static method {node.left.name} on class {class_info.id.name}",
+                )
+            self.set_type(node, attr.type)
+            return
         assert isinstance(lhs_ty, typesys.Instance)
         class_info = self.type_ctx.get_class_info(lhs_ty.type_constructor)
         if class_info is None:
@@ -459,9 +484,19 @@ class MethodExprTypeVisitor(ScopeVisitor):
             this_is_receiver = True
         elif isinstance(node.target, ast.DotExpr):
             # Method on some other class instance
-            recv_ty = self.get_type(node.target.left)
-            assert isinstance(recv_ty, typesys.Instance)
-            target_tycon = recv_ty.type_constructor
+            recv_ty = self.try_get_type(node.target.left)
+            if recv_ty is None:
+                if not isinstance(node.target.left, ast.IdentExpr):
+                    raise JoeUnreachable()
+                # Static method call
+                maybe_tycon = self.type_ctx.get_type_constructor(
+                    node.target.left.name
+                )
+                assert maybe_tycon is not None
+                target_tycon = maybe_tycon
+            else:
+                assert isinstance(recv_ty, typesys.Instance)
+                target_tycon = recv_ty.type_constructor
             method_name = node.target.name
             # If the call is like `super.someMethod()` then `this` is still the
             # receiver (more precisely {this.data.parent, this.vtable.parent})

@@ -24,7 +24,7 @@ parso==0.8.2
     # via jedi
 pathspec==0.8.1
     # via black
-patina==0.3.1
+patina==0.5.0
     # via -r requirements.in
 pep517==0.10.0
     # via pip-tools

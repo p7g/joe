@@ -938,6 +938,9 @@ class ExprCompiler(Visitor):
     ) -> cnodes.CExpr:
         return cache_in_local(self.ctx.cfunc, self.type_ctx, expr, type_)
 
+    def try_get_node_type(self, node: ast.Node) -> t.Optional[typesys.Type]:
+        return self.ctx.expr_types.get(node)
+
     def get_node_type(self, node: ast.Node) -> typesys.Type:
         return self.ctx.expr_types[node]
 
@@ -948,7 +951,14 @@ class ExprCompiler(Visitor):
         return new_variable(self.ctx.cfunc, self.ctx.types, ty)
 
     def visit_IdentExpr(self, node: ast.IdentExpr) -> None:
-        ty = self.get_node_type(node)
+        ty = self.try_get_node_type(node)
+        if ty is None:
+            # Static method call
+            tycon = self.type_ctx.get_type_constructor(node.name)
+            assert tycon is not None
+            ci = self.type_ctx.get_class_info(tycon)
+            assert ci is not None
+            return
         expr: cnodes.CExpr
         assert isinstance(ty, typesys.Instance)
         if ty.type_constructor.is_function:
@@ -1025,9 +1035,15 @@ class ExprCompiler(Visitor):
             class_info = self.ctx.class_info
             meth_name = node.target.name
         elif isinstance(node.target, ast.DotExpr):
-            recv_ty = self.get_node_type(node.target.left)
-            assert isinstance(recv_ty, typesys.Instance)
-            class_info2 = self.type_ctx.get_class_info(recv_ty.type_constructor)
+            recv_ty = self.try_get_node_type(node.target.left)
+            if recv_ty is None:
+                assert isinstance(node.target.left, ast.IdentExpr)
+                tycon = self.type_ctx.get_type_constructor(node.target.left.name)
+                assert tycon is not None
+                class_info2 = self.type_ctx.get_class_info(tycon)
+            else:
+                assert isinstance(recv_ty, typesys.Instance)
+                class_info2 = self.type_ctx.get_class_info(recv_ty.type_constructor)
             assert class_info2 is not None
             class_info = class_info2
             meth_name = node.target.name
@@ -1157,7 +1173,31 @@ class ExprCompiler(Visitor):
 
     def visit_DotExpr(self, node: ast.DotExpr) -> None:
         self.visit_Expr(node.left)
-        left = self.last_expr.take().unwrap()
+
+        left = self.last_expr.take().into_optional()
+
+        if left is None:
+            # Static method call
+            assert isinstance(node.left, ast.IdentExpr)
+            tycon = self.type_ctx.get_type_constructor(node.left.name)
+            assert tycon is not None
+            ci = self.type_ctx.get_class_info(tycon)
+            assert ci is not None
+
+            attr = ci.get_attribute(node.name)
+            assert isinstance(attr, objects.Method) and attr.static
+
+            self.last_expr.replace(
+                cnodes.CVariable(
+                    get_class_method_impl_name(
+                        self.type_ctx,
+                        typesys.Instance(tycon, []),
+                        attr.name,
+                    )
+                )
+            )
+            return
+
         left_ty = self.get_node_type(node.left)
         assert isinstance(left_ty, typesys.Instance)
 

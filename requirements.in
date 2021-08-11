@@ -3,4 +3,4 @@ black
 mypy>=0.910
 jedi
 
-patina
+patina>=0.5.0
