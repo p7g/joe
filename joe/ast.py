@@ -87,6 +87,11 @@ class Expr(Node):
 
 
 @dataclass(eq=False)
+class BoolExpr(Expr):
+    value: bool
+
+
+@dataclass(eq=False)
 class AssignmentTarget(Expr):
     pass
 

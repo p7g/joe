@@ -6,6 +6,7 @@ from joe.source import JoeNameError
 primitive_types = {
     "int": typesys.TypeConstructor(parameters=[], super_=typesys.TopType()),
     "double": typesys.TypeConstructor(parameters=[], super_=typesys.TopType()),
+    "boolean": typesys.TypeConstructor(parameters=[], super_=typesys.TopType()),
 }
 
 _primitive_names: t.Mapping[typesys.TypeConstructor, str] = {}

@@ -12,6 +12,7 @@ class TokenType(enum.IntEnum):
     Delete = enum.auto()
     Do = enum.auto()
     Extends = enum.auto()
+    False_ = enum.auto()
     Final = enum.auto()
     For = enum.auto()
     Free = enum.auto()
@@ -24,6 +25,7 @@ class TokenType(enum.IntEnum):
     Static = enum.auto()
     Super = enum.auto()
     This = enum.auto()
+    True_ = enum.auto()
     Void = enum.auto()
     While = enum.auto()
     Ident = enum.auto()
@@ -78,6 +80,7 @@ _keywords = {
     "delete": TokenType.Delete,
     "do": TokenType.Do,
     "extends": TokenType.Extends,
+    "false": TokenType.False_,
     "final": TokenType.Final,
     "for": TokenType.For,
     "free": TokenType.Free,
@@ -90,6 +93,7 @@ _keywords = {
     "static": TokenType.Static,
     "super": TokenType.Super,
     "this": TokenType.This,
+    "true": TokenType.True_,
     "void": TokenType.Void,
     "while": TokenType.While,
 }

@@ -278,6 +278,11 @@ class MethodExprTypeVisitor(ScopeVisitor):
 
         super().visit_Method(node)
 
+    def visit_BoolExpr(self, node: ast.BoolExpr):
+        tycon = self.type_ctx.get_type_constructor("boolean")
+        assert tycon is not None
+        self.set_type(node, typesys.Instance(tycon, []))
+
     def visit_AssignExpr(self, node: ast.AssignExpr):
         super().visit_AssignExpr(node)
         lhs_ty = self.get_type(node.target)

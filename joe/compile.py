@@ -92,6 +92,10 @@ def get_ctype(ctx: TypeContext, typ: typesys.Type) -> cnodes.CType:
         typ, typesys.Instance
     ) and typ.type_constructor == ctx.get_type_constructor("double"):
         return cnodes.CNamedType("double")
+    elif isinstance(
+        typ, typesys.Instance
+    ) and typ.type_constructor == ctx.get_type_constructor("boolean"):
+        return cnodes.CNamedType("int")
     elif isinstance(typ, typesys.BottomType):
         return cnodes.CNamedType("void")
     elif isinstance(typ, typesys.Instance):
@@ -1363,3 +1367,6 @@ class ExprCompiler(Visitor):
         self.visit_Expr(node.index)
         index = self.last_expr.take().unwrap()
         self.last_expr.replace(get_array_element(target, index))
+
+    def visit_BoolExpr(self, node: ast.BoolExpr) -> None:
+        self.last_expr.replace(cnodes.CInteger(int(node.value)))
