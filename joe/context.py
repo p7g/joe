@@ -30,7 +30,9 @@ class GlobalContext:
             for classinfo in classinfos:
                 self.type_ctx.add_class(classinfo.id.name, classinfo)
 
-    def _class_type(self, child_type_ctx: "TypeContext", mod: ast.Module) -> t.List[objects.ClassInfo]:
+    def _class_type(
+        self, child_type_ctx: "TypeContext", mod: ast.Module
+    ) -> t.List[objects.ClassInfo]:
         from joe.typevisitor import ClassDeclarationVisitor
 
         for import_ in mod.imports:
@@ -45,7 +47,9 @@ class GlobalContext:
 
         decls = []
         for class_decl in mod.class_decls:
-            ci = ClassDeclarationVisitor.get_class_info(child_type_ctx, class_decl)
+            ci = ClassDeclarationVisitor.get_class_info(
+                child_type_ctx, class_decl
+            )
             decls.append(ci)
             child_type_ctx.add_class(ci.id.basename, ci)
         return decls

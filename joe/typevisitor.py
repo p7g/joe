@@ -274,9 +274,7 @@ class MethodExprTypeVisitor(ScopeVisitor):
                 actual_name=actual_name, type=ty
             )
 
-        self.is_constructor = (
-            node.name.value == self.class_.id.basename
-        )
+        self.is_constructor = node.name.value == self.class_.id.basename
 
         super().visit_Method(node)
 

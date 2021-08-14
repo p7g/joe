@@ -21,7 +21,7 @@ def warn(type: Diagnostic, *args, location: Location, **kwargs) -> None:
         return
 
     if args or kwargs:  # type: ignore
-        assert (bool(args) ^ bool(kwargs))  # type: ignore
+        assert bool(args) ^ bool(kwargs)  # type: ignore
 
     diagnostic_message = type.message % (args or kwargs)  # type: ignore
     print(

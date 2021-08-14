@@ -176,4 +176,4 @@ class ExprStmt(Stmt):
 class VarDeclaration(Stmt):
     name: Name
     type: Type
-    initializer: t.Optional["Expr"];
+    initializer: t.Optional["Expr"]

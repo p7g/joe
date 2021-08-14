@@ -1042,12 +1042,16 @@ class ExprCompiler(Visitor):
             recv_ty = self.try_get_node_type(node.target.left)
             if recv_ty is None:
                 assert isinstance(node.target.left, ast.IdentExpr)
-                tycon = self.type_ctx.get_type_constructor(node.target.left.name)
+                tycon = self.type_ctx.get_type_constructor(
+                    node.target.left.name
+                )
                 assert tycon is not None
                 class_info2 = self.type_ctx.get_class_info(tycon)
             else:
                 assert isinstance(recv_ty, typesys.Instance)
-                class_info2 = self.type_ctx.get_class_info(recv_ty.type_constructor)
+                class_info2 = self.type_ctx.get_class_info(
+                    recv_ty.type_constructor
+                )
             assert class_info2 is not None
             class_info = class_info2
             meth_name = node.target.name

@@ -137,6 +137,8 @@ class Method(Attribute):
 
 
 class Field(Attribute):
-    def __init__(self, name: str, type_: typesys.Type, ci: ClassInfo, final: bool) -> None:
+    def __init__(
+        self, name: str, type_: typesys.Type, ci: ClassInfo, final: bool
+    ) -> None:
         super().__init__(name, type_, ci)
         self.final = final
