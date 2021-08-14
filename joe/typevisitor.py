@@ -280,6 +280,11 @@ class MethodExprTypeVisitor(ScopeVisitor):
     def visit_NullExpr(self, node: ast.NullExpr):
         self.set_type(node, self.type_ctx.get_null_type())
 
+    def visit_CharExpr(self, node: ast.CharExpr):
+        char_tycon = self.type_ctx.get_type_constructor("char")
+        assert char_tycon is not None
+        self.set_type(node, typesys.Instance(char_tycon, []))
+
     def visit_BoolExpr(self, node: ast.BoolExpr):
         tycon = self.type_ctx.get_type_constructor("boolean")
         assert tycon is not None

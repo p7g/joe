@@ -87,6 +87,11 @@ class Expr(Node):
 
 
 @dataclass(eq=False)
+class CharExpr(Expr):
+    value: str
+
+
+@dataclass(eq=False)
 class NullExpr(Expr):
     pass
 

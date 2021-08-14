@@ -357,6 +357,8 @@ class Parser:
             expr = self._parse_expr()
             self.tokens.next().expect(TokenType.RParen)
             return expr
+        elif tok.type == TokenType.Char:
+            return ast.CharExpr(tok.location, tok.value[1])
         else:
             raise JoeSyntaxError(
                 tok.location, f"Unexpected token {tok.type.value}"

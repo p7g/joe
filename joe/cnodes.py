@@ -289,6 +289,19 @@ class CInteger(CExpr):
 
 
 @dataclass
+class CCharExpr(CExpr):
+    value: str
+
+    def __str__(self):
+        assert len(self.value) == 1
+        # FIXME: don't rely so much on string repr
+        _open_quote, *cs, _close_quote = list(repr(self.value))
+        if cs == ["'"]:
+            cs = ["\\", "'"]
+        return f"'{''.join(cs)}'"
+
+
+@dataclass
 class CRef(CExpr):
     inner: CExpr
 
