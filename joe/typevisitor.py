@@ -274,7 +274,9 @@ class MethodExprTypeVisitor(ScopeVisitor):
                 actual_name=actual_name, type=ty
             )
 
-        self.is_constructor = node.name.value == self.class_.id.name
+        self.is_constructor = (
+            node.name.value == self.class_.id.basename
+        )
 
         super().visit_Method(node)
 
@@ -372,7 +374,7 @@ class MethodExprTypeVisitor(ScopeVisitor):
             raise JoeTypeError(
                 node.type.location, "Can't create primitive object"
             )
-        class_basename = class_info.id.name.rsplit(".")[-1]
+        class_basename = class_info.id.basename
         # FIXME: if no constructor declared copy it from parent
         constructor = class_info.attributes.get(class_basename)
         if constructor is None:
@@ -514,7 +516,7 @@ class MethodExprTypeVisitor(ScopeVisitor):
                 )
             assert self.class_.superclass is not None
             target_tycon = self.class_.superclass.type
-            method_name = self.class_.superclass.id.name.rsplit(".", 1)[-1]
+            method_name = self.class_.superclass.id.basename
             this_is_receiver = True
 
         class_info = self.type_ctx.get_class_info(target_tycon)

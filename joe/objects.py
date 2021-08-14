@@ -5,9 +5,31 @@ import typing as t
 from joe import typesys
 
 
+def split_path(path: str) -> t.Tuple[t.Optional[str], str]:
+    parts = path.rsplit(".", 1)
+    if len(parts) == 2:
+        modname, basename = parts
+        return modname, basename
+    return None, parts[0]
+
+
+def path_basename(path: str) -> str:
+    _modname, basename = split_path(path)
+    return basename
+
+
+def path_modname(path: str) -> t.Optional[str]:
+    modname, _basename = split_path(path)
+    return modname
+
+
 class ClassID:
     def __init__(self, name: str) -> None:
         self.name = name
+
+    @property
+    def basename(self) -> str:
+        return path_basename(self.name)
 
 
 class ClassInfo:

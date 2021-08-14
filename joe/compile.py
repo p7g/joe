@@ -767,7 +767,7 @@ class ClassCompiler(Visitor):
             body=[],
         )
 
-        is_constructor = meth.name == class_ty.id.name.rsplit(".", 1)[-1]
+        is_constructor = meth.name == class_ty.id.basename
         if not node.static:
             self_type: cnodes.CType = get_ctype(
                 self.type_ctx, typesys.Instance(class_ty.type, [])
@@ -1055,9 +1055,7 @@ class ExprCompiler(Visitor):
             assert self.ctx.is_constructor
             assert self.ctx.class_info.superclass is not None
             class_info = self.ctx.class_info.superclass
-            meth_name = self.ctx.class_info.superclass.id.name.rsplit(".", 1)[
-                -1
-            ]
+            meth_name = self.ctx.class_info.superclass.id.basename
 
         meth_info = class_info.get_attribute(meth_name)
         assert isinstance(meth_info, objects.Method)
@@ -1349,7 +1347,7 @@ class ExprCompiler(Visitor):
                 get_class_method_impl_name(
                     self.type_ctx,
                     typesys.Instance(self.ctx.class_info.superclass.type, []),
-                    self.ctx.class_info.superclass.id.name.rsplit(".", 1)[-1],
+                    self.ctx.class_info.superclass.id.basename,
                 )
             )
         )

@@ -5,6 +5,7 @@ from patina import Option, None_
 
 from joe import ast
 from joe.lexer import Token, TokenType, lex
+from joe.objects import path_modname
 from joe.source import Location, JoeSyntaxError
 from joe._utils import Peekable
 
@@ -75,9 +76,9 @@ class Parser:
 
         modules.append(
             ast.Module(
-                name=ModulePath.from_file_path(self.filename)
-                .dotted_path()
-                .rsplit(".", 1)[0],
+                name=path_modname(
+                    ModulePath.from_file_path(self.filename).dotted_path()
+                ) or "",
                 class_decls=class_decls,
                 imports=imports,
             )

@@ -41,13 +41,13 @@ class GlobalContext:
             classinfo = self.type_ctx.get_class_info(tycon)
             if classinfo is None:
                 raise JoeNameError(import_.location, f"Unknown class {path}")
-            child_type_ctx.add_class(classinfo.id.name.rsplit(".", 1)[-1], classinfo)
+            child_type_ctx.add_class(classinfo.id.basename, classinfo)
 
         decls = []
         for class_decl in mod.class_decls:
             ci = ClassDeclarationVisitor.get_class_info(child_type_ctx, class_decl)
             decls.append(ci)
-            child_type_ctx.add_class(ci.id.name.rsplit(".", 1)[-1], ci)
+            child_type_ctx.add_class(ci.id.basename, ci)
         return decls
 
 
