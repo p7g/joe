@@ -1409,3 +1409,13 @@ class ExprCompiler(Visitor):
 
     def visit_CharExpr(self, node: ast.CharExpr) -> None:
         self.last_expr.replace(cnodes.CCharExpr(node.value))
+
+    def visit_CastExpr(self, node: ast.CastExpr) -> None:
+        super().visit_CastExpr(node)
+        expr = self.last_expr.take().unwrap()
+        self.last_expr.replace(
+            cnodes.CCast(
+                expr,
+                get_ctype(self.type_ctx, self.get_node_type(node)),
+            )
+        )

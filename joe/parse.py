@@ -4,6 +4,7 @@ import typing as t
 from patina import Option, None_
 
 from joe import ast
+from joe.exc import JoeUnreachable
 from joe.lexer import Token, TokenType, lex
 from joe.objects import path_modname
 from joe.source import Location, JoeSyntaxError
@@ -326,6 +327,17 @@ class Parser:
         return left
 
     def _parse_atom(self) -> ast.Expr:
+        if self.tokens.peek().type == TokenType.LParen:
+            snapshot = self._take_snapshot()
+            try:
+                return self._parse_cast_expr()
+            except JoeSyntaxError:
+                self._apply_snapshot(snapshot)
+                self.tokens.next().expect(TokenType.LParen)
+                expr = self._parse_expr()
+                self.tokens.next().expect(TokenType.RParen)
+                return expr
+
         tok = self.tokens.next()
         if tok.type == TokenType.Int:
             return ast.IntExpr(location=tok.location, value=int(tok.value))
@@ -354,12 +366,18 @@ class Parser:
         elif tok.type == TokenType.Null:
             return ast.NullExpr(tok.location)
         elif tok.type == TokenType.LParen:
-            expr = self._parse_expr()
-            self.tokens.next().expect(TokenType.RParen)
-            return expr
+            raise JoeUnreachable()
         elif tok.type == TokenType.Char:
             return ast.CharExpr(tok.location, tok.value[1])
         else:
             raise JoeSyntaxError(
                 tok.location, f"Unexpected token {tok.type.value}"
             )
+
+    def _parse_cast_expr(self) -> ast.Expr:
+        lparen = self.tokens.next().expect(TokenType.LParen)
+        ty = self._parse_type()
+        self.tokens.next().expect(TokenType.RParen)
+        # FIXME: Precedence of casting?
+        expr = self._parse_atom()
+        return ast.CastExpr(lparen.location, ty, expr)

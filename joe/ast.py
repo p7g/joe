@@ -87,6 +87,12 @@ class Expr(Node):
 
 
 @dataclass(eq=False)
+class CastExpr(Expr):
+    type: Type
+    expr: Expr
+
+
+@dataclass(eq=False)
 class CharExpr(Expr):
     value: str
 

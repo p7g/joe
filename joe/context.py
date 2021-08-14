@@ -108,6 +108,9 @@ class TypeContext:
     ) -> t.Optional[typesys.TypeConstructor]:
         return self._type_scope.get(name)
 
+    def get_primitive_type_constructor(self, name: str) -> typesys.TypeConstructor:
+        return primitive_types[name]
+
     def get_class_info(
         self, tycon: typesys.TypeConstructor
     ) -> t.Optional[objects.ClassInfo]:

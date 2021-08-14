@@ -100,6 +100,8 @@ class Visitor:
             self.visit_BoolExpr(node)
         elif isinstance(node, ast.CharExpr):
             self.visit_CharExpr(node)
+        elif isinstance(node, ast.CastExpr):
+            self.visit_CastExpr(node)
         else:
             raise NotImplementedError(node)
 
@@ -111,6 +113,10 @@ class Visitor:
 
     def visit_CharExpr(self, node: ast.CharExpr):
         pass
+
+    def visit_CastExpr(self, node: ast.CastExpr):
+        self.visit_Type(node.type)
+        self.visit_Expr(node.expr)
 
     def visit_AssignmentTarget(self, node: ast.AssignmentTarget):
         if isinstance(node, ast.IdentExpr):

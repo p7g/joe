@@ -580,6 +580,36 @@ class MethodExprTypeVisitor(ScopeVisitor):
         else:
             self.set_type(node, int_ty)
 
+    def visit_CastExpr(self, node: ast.CastExpr):
+        super().visit_CastExpr(node)
+
+        dest_ty = self.analyze_type(node.type)
+        assert isinstance(dest_ty, typesys.Instance)
+        src_ty = self.get_type(node.expr)
+        assert isinstance(src_ty, typesys.Instance)
+
+        int_tycon = self.type_ctx.get_primitive_type_constructor("int")
+        double_tycon = self.type_ctx.get_primitive_type_constructor("double")
+        bool_tycon = self.type_ctx.get_primitive_type_constructor("boolean")
+        char_tycon = self.type_ctx.get_primitive_type_constructor("char")
+
+        if src_ty.type_constructor == int_tycon:
+            if dest_ty.type_constructor not in (char_tycon, bool_tycon, double_tycon):
+                raise JoeTypeError(node.location, "Invalid cast")
+        elif src_ty.type_constructor == double_tycon:
+            if dest_ty.type_constructor != int_tycon:
+                raise JoeTypeError(node.location, "Invalid cast")
+        elif src_ty.type_constructor == bool_tycon:
+            if dest_ty.type_constructor != int_tycon:
+                raise JoeTypeError(node.location, "Invalid cast")
+        elif src_ty.type_constructor == char_tycon:
+            if dest_ty.type_constructor != int_tycon:
+                raise JoeTypeError(node.location, "Invalid cast")
+        else:
+            raise JoeTypeError(node.location, "Invalid cast")
+
+        self.set_type(node, dest_ty)
+
     def visit_IndexExpr(self, node: ast.IndexExpr):
         super().visit_IndexExpr(node)
         target_ty = self.get_type(node.target)
