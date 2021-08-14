@@ -59,7 +59,7 @@ class Invariant(Variance):
 
 class Contravariant(Variance):
     def is_satisfied(self, left: Type, right: Type) -> bool:
-        return left == right or right.is_supertype_of(left)
+        return left == right or left.is_subtype_of(right)
 
     def __eq__(self, other) -> bool:
         if not isinstance(other, Variance):  # type: ignore
@@ -69,7 +69,7 @@ class Contravariant(Variance):
 
 class Covariant(Variance):
     def is_satisfied(self, left: Type, right: Type) -> bool:
-        return left == right or left.is_supertype_of(right)
+        return left == right or right.is_subtype_of(left)
 
     def __eq__(self, other) -> bool:
         if not isinstance(other, Variance):  # type: ignore
@@ -78,13 +78,13 @@ class Covariant(Variance):
 
 
 class Type:
-    def is_supertype_of(self, other: Type) -> bool:
+    def is_subtype_of(self, other: Type) -> bool:
         raise NotImplementedError()
 
 
 class TopType(Type):
-    def is_supertype_of(self, other: Type) -> bool:
-        return True
+    def is_subtype_of(self, other: Type) -> bool:
+        return False
 
     def __eq__(self, other) -> bool:
         if not isinstance(other, Type):  # type: ignore
@@ -93,8 +93,8 @@ class TopType(Type):
 
 
 class BottomType(Type):
-    def is_supertype_of(self, other: Type) -> bool:
-        return False
+    def is_subtype_of(self, other: Type) -> bool:
+        return True
 
     def __eq__(self, other) -> bool:
         if not isinstance(other, Type):  # type: ignore
@@ -106,7 +106,7 @@ class TypeVariable(Type):
     def __init__(self, parameter: TypeParameter) -> None:
         self.parameter = parameter
 
-    def is_supertype_of(self, other: Type) -> bool:
+    def is_subtype_of(self, other: Type) -> bool:
         # If this variable is a covariant type parameter, it could be its bound
         # or any subtype of its bound.
         # If it's a contravariant type parameter, it could be its bound or any
@@ -114,7 +114,7 @@ class TypeVariable(Type):
         # Therefore, this variable "is a supertype" (i.e. `other` is compatible
         # with it) if `other` is related to the bounding type according to the
         # variance declared by the type parameter. (I think)
-        return self.parameter.variance.is_satisfied(self.parameter.bound, other)
+        return self.parameter.variance.is_satisfied(other, self.parameter.bound)
 
     def __eq__(self, other) -> bool:
         if not isinstance(other, Type):  # type: ignore
@@ -131,7 +131,7 @@ class Instance(Type):
         self.type_constructor = type_constructor
         self.arguments = arguments
 
-    def is_supertype_of(self, other: Type) -> bool:
+    def is_subtype_of(self, other: Type) -> bool:
         if not isinstance(other, Instance) or self == other:
             return False
         if self.type_constructor == other.type_constructor:
@@ -139,12 +139,12 @@ class Instance(Type):
                 p.variance.is_satisfied(l, r)
                 for p, l, r in zip(
                     self.type_constructor.parameters,
-                    self.arguments,
                     other.arguments,
+                    self.arguments,
                 )
             )
-        for parent in other.type_constructor.parents():
-            if self == parent or self.is_supertype_of(parent):
+        for parent in self.type_constructor.parents():
+            if other == parent or parent.is_subtype_of(other):
                 return True
         return False
 
@@ -170,30 +170,30 @@ B = TypeConstructor([], Instance(A, []))
 
 # Invariant type parameter
 C = TypeConstructor([TypeParameter(Invariant(), top)], object_instance)
-assert not Instance(C, [Instance(A, [])]).is_supertype_of(
-    Instance(C, [Instance(B, [])])
-)
-assert not Instance(C, [Instance(B, [])]).is_supertype_of(
+assert not Instance(C, [Instance(B, [])]).is_subtype_of(
     Instance(C, [Instance(A, [])])
+)
+assert not (
+    Instance(C, [Instance(A, [])]).is_subtype_of(Instance(C, [Instance(B, [])]))
 )
 assert Instance(C, [Instance(A, [])]) == Instance(C, [Instance(A, [])])
 
 # Covariant type parameter
 D = TypeConstructor([TypeParameter(Covariant(), top)], object_instance)
-assert Instance(D, [Instance(A, [])]).is_supertype_of(
-    Instance(D, [Instance(B, [])])
-)
-assert not Instance(D, [Instance(B, [])]).is_supertype_of(
+assert Instance(D, [Instance(B, [])]).is_subtype_of(
     Instance(D, [Instance(A, [])])
+)
+assert not Instance(D, [Instance(A, [])]).is_subtype_of(
+    Instance(D, [Instance(B, [])])
 )
 
 # Contravariant type parameter
 E = TypeConstructor([TypeParameter(Contravariant(), top)], object_instance)
-assert Instance(E, [Instance(B, [])]).is_supertype_of(
-    Instance(E, [Instance(A, [])])
-)
-assert not Instance(E, [Instance(A, [])]).is_supertype_of(
+assert Instance(E, [Instance(A, [])]).is_subtype_of(
     Instance(E, [Instance(B, [])])
+)
+assert not Instance(E, [Instance(B, [])]).is_subtype_of(
+    Instance(E, [Instance(A, [])])
 )
 
 # Type constructor for all binary functions
@@ -215,16 +215,14 @@ function_type = Instance(
     ],
 )
 
-assert function_type.is_supertype_of(
-    Instance(
-        function2,
-        [
-            object_instance,
-            Instance(A, []),
-            Instance(B, []),
-        ],
-    )
-)
+assert Instance(
+    function2,
+    [
+        object_instance,
+        Instance(A, []),
+        Instance(B, []),
+    ],
+).is_subtype_of(function_type)
 
 # When visiting class body
 # Context of type parameters in scope

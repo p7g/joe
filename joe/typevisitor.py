@@ -140,9 +140,8 @@ class ClassDeclarationVisitor(Visitor):
                 raise JoeTypeError(
                     node.location, "Cannot override final method"
                 )
-            if (
-                parent_attr.type != meth_ty
-                and not parent_attr.type.is_supertype_of(meth_ty)
+            if parent_attr.type != meth_ty and not meth_ty.is_subtype_of(
+                parent_attr.type
             ):
                 raise JoeTypeError(
                     node.location, "Incompatible method override"
@@ -287,7 +286,7 @@ class MethodExprTypeVisitor(ScopeVisitor):
         super().visit_AssignExpr(node)
         lhs_ty = self.get_type(node.target)
         rhs_ty = self.get_type(node.value)
-        if lhs_ty != rhs_ty and not lhs_ty.is_supertype_of(rhs_ty):
+        if lhs_ty != rhs_ty and not rhs_ty.is_subtype_of(lhs_ty):
             raise JoeTypeError(
                 node.location, "Incompatible types in assignment"
             )
@@ -389,7 +388,7 @@ class MethodExprTypeVisitor(ScopeVisitor):
                 )
             for arg, param in zip(node.arguments, constructor.parameter_types):
                 arg_ty = self.get_type(arg)
-                if arg_ty != param and not param.is_supertype_of(arg_ty):
+                if arg_ty != param and not arg_ty.is_subtype_of(param):
                     raise JoeTypeError(
                         arg.location, "Incorrect type for constructor argument"
                     )
@@ -543,7 +542,7 @@ class MethodExprTypeVisitor(ScopeVisitor):
             )
         if not all(
             self.get_type(arg) == param
-            or param.is_supertype_of(self.get_type(arg))
+            or self.get_type(arg).is_subtype_of(param)
             for arg, param in zip(node.arguments, called_method.parameter_types)
         ):
             raise JoeTypeError(
@@ -599,7 +598,7 @@ class MethodExprTypeVisitor(ScopeVisitor):
             ret_expr_ty = self.get_type(node.expr)
         if (
             ret_expr_ty != self.method.return_type
-            and not self.method.return_type.is_supertype_of(ret_expr_ty)
+            and not ret_expr_ty.is_subtype_of(self.method.return_type)
         ):
             raise JoeTypeError(node.location, "Incorrect return type")
 
@@ -629,8 +628,8 @@ class MethodExprTypeVisitor(ScopeVisitor):
 
         if node.initializer is not None:
             init_type = self.get_type(node.initializer)
-            if local_type != init_type and not local_type.is_supertype_of(
-                init_type
+            if local_type != init_type and not init_type.is_subtype_of(
+                local_type
             ):
                 raise JoeTypeError(
                     node.initializer.location, "Incompatible assignment"
