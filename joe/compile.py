@@ -5,7 +5,7 @@ from patina import Option, None_
 from typing_extensions import TypeGuard
 
 from joe import ast, cnodes, mangle, objects, typesys
-from joe.context import GlobalContext, TypeContext
+from joe.context import GlobalContext, TypeContext, NullType
 from joe.exc import JoeUnreachable
 from joe.parse import ModulePath
 from joe.scopevisitor import ScopeVisitor, escape_name
@@ -293,6 +293,25 @@ def get_array_name(ctx: TypeContext, array_ty: typesys.Type) -> str:
             "joe.0virtual.Array", [_get_type_name(ctx, array_ty.arguments[0])]
         )
     )
+
+
+def is_null(ty: typesys.Instance) -> TypeGuard[NullType]:
+    return isinstance(ty, NullType)
+
+
+NULL = cnodes.CVariable("NULL")
+
+
+def make_null(ctx: TypeContext, ci: objects.ClassInfo) -> cnodes.CExpr:
+    if optimize_single_field(ci):
+        raise NotImplementedError()
+    elif ci.final:
+        return NULL
+    else:
+        return make_struct_literal(
+            get_ctype(ctx, typesys.Instance(ci.type, [])),
+            [NULL, NULL],
+        )
 
 
 def make_array_struct(
@@ -892,24 +911,27 @@ class MethodCompiler(ScopeVisitor):
             return
 
         dest_name = self.resolve_name(node.name.value, location=node.location)
-        value = self.compile_expr(node.initializer)
+        dest_type = self.get_node_type(node)
+        assert isinstance(dest_type, typesys.Instance)
+        dest_ci = self.type_ctx.get_class_info(dest_type.type_constructor)
 
         src_type = self.get_node_type(node.initializer)
-        dest_type = self.get_node_type(node)
-
-        assert isinstance(dest_type, typesys.Instance)
         assert isinstance(src_type, typesys.Instance)
 
-        src_ci = self.type_ctx.get_class_info(src_type.type_constructor)
-        dest_ci = self.type_ctx.get_class_info(dest_type.type_constructor)
-        if src_ci is not None:
+        if is_null(src_type):
             assert dest_ci is not None
-            value = obj_as_parent(
-                self.type_ctx,
-                src_ci,
-                dest_ci,
-                self.cache_in_local(value, src_type),
-            )
+            value = make_null(self.type_ctx, dest_ci)
+        else:
+            value = self.compile_expr(node.initializer)
+            src_ci = self.type_ctx.get_class_info(src_type.type_constructor)
+            if src_ci is not None:
+                assert dest_ci is not None
+                value = obj_as_parent(
+                    self.type_ctx,
+                    src_ci,
+                    dest_ci,
+                    self.cache_in_local(value, src_type),
+                )
 
         assign_stmt = make_assign_stmt(
             cnodes.CVariable(get_local_name(dest_name)), value
@@ -1102,24 +1124,28 @@ class ExprCompiler(Visitor):
 
         for param, arg in zip(meth_info.parameter_types, node.arguments):
             self.visit_Expr(arg)
-            value = self.last_expr.take().unwrap()
+
+            dest_type = param
+            assert isinstance(dest_type, typesys.Instance)
+            dest_ci = self.type_ctx.get_class_info(dest_type.type_constructor)
 
             src_type = self.get_node_type(arg)
-            dest_type = param
-
-            assert isinstance(dest_type, typesys.Instance)
             assert isinstance(src_type, typesys.Instance)
-
             src_ci = self.type_ctx.get_class_info(src_type.type_constructor)
-            dest_ci = self.type_ctx.get_class_info(dest_type.type_constructor)
-            if src_ci is not None:
+
+            if is_null(dest_type):
                 assert dest_ci is not None
-                value = obj_as_parent(
-                    self.type_ctx,
-                    src_ci,
-                    dest_ci,
-                    self.cache_in_local(value, src_type),
-                )
+                value = make_null(self.type_ctx, dest_ci)
+            else:
+                value = self.last_expr.take().unwrap()
+                if src_ci is not None:
+                    assert dest_ci is not None
+                    value = obj_as_parent(
+                        self.type_ctx,
+                        src_ci,
+                        dest_ci,
+                        self.cache_in_local(value, src_type),
+                    )
 
             args.append(value)
 
@@ -1133,24 +1159,28 @@ class ExprCompiler(Visitor):
         dest = self.last_expr.take().unwrap()
         assert isinstance(dest, cnodes.CAssignmentTarget)
         self.visit_Expr(node.value)
-        value = self.last_expr.take().unwrap()
+
+        dest_type = self.get_node_type(node.target)
+        assert isinstance(dest_type, typesys.Instance)
+        dest_ci = self.type_ctx.get_class_info(dest_type.type_constructor)
 
         src_type = self.get_node_type(node.value)
-        dest_type = self.get_node_type(node.target)
-
-        assert isinstance(dest_type, typesys.Instance)
         assert isinstance(src_type, typesys.Instance)
 
-        src_ci = self.type_ctx.get_class_info(src_type.type_constructor)
-        dest_ci = self.type_ctx.get_class_info(dest_type.type_constructor)
-        if src_ci is not None:
+        if is_null(src_type):
             assert dest_ci is not None
-            value = obj_as_parent(
-                self.type_ctx,
-                src_ci,
-                dest_ci,
-                self.cache_in_local(value, src_type),
-            )
+            value = make_null(self.type_ctx, dest_ci)
+        else:
+            value = self.last_expr.take().unwrap()
+            src_ci = self.type_ctx.get_class_info(src_type.type_constructor)
+            if src_ci is not None:
+                assert dest_ci is not None
+                value = obj_as_parent(
+                    self.type_ctx,
+                    src_ci,
+                    dest_ci,
+                    self.cache_in_local(value, src_type),
+                )
 
         self.last_expr.replace(cnodes.CAssignmentExpr(dest, value))
 

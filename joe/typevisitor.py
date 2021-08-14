@@ -277,6 +277,9 @@ class MethodExprTypeVisitor(ScopeVisitor):
 
         super().visit_Method(node)
 
+    def visit_NullExpr(self, node: ast.NullExpr):
+        self.set_type(node, self.type_ctx.get_null_type())
+
     def visit_BoolExpr(self, node: ast.BoolExpr):
         tycon = self.type_ctx.get_type_constructor("boolean")
         assert tycon is not None

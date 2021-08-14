@@ -94,10 +94,15 @@ class Visitor:
             self.visit_SuperExpr(node)
         elif isinstance(node, ast.ThisExpr):
             self.visit_ThisExpr(node)
+        elif isinstance(node, ast.NullExpr):
+            self.visit_NullExpr(node)
         elif isinstance(node, ast.BoolExpr):
             self.visit_BoolExpr(node)
         else:
             raise NotImplementedError(node)
+
+    def visit_NullExpr(self, node: ast.NullExpr):
+        pass
 
     def visit_BoolExpr(self, node: ast.BoolExpr):
         pass

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import typing as t
 
 from joe import ast, objects, typesys
@@ -15,6 +17,20 @@ for name, tycon in primitive_types.items():
     t.cast(t.MutableMapping[typesys.TypeConstructor, str], _primitive_names)[
         tycon
     ] = name
+
+
+class NullType(typesys.Instance):
+    type_constructor = typesys.TypeConstructor([], typesys.TopType())
+
+    def __init__(self, type_ctx: TypeContext) -> None:
+        super().__init__(self.type_constructor, [])
+        self.type_ctx = type_ctx
+
+    def is_subtype_of(self, other: typesys.Type) -> bool:
+        if not isinstance(other, typesys.Instance):
+            return False
+        # null is a subtype of every object
+        return self.type_ctx.get_class_info(other.type_constructor) is not None
 
 
 class GlobalContext:
@@ -68,6 +84,7 @@ class TypeContext:
             typesys.TypeConstructor, objects.ClassInfo
         ] = t.ChainMap(class_infos)
         self._used_array_types: t.List[typesys.Type] = []
+        self._null_type = NullType(self)
 
     def new_child(self) -> "TypeContext":
         return TypeContext(self._type_scope, self._classes_by_type)
@@ -81,6 +98,9 @@ class TypeContext:
         if any(t == ty for t in self._used_array_types):
             return
         self._used_array_types.append(ty)
+
+    def get_null_type(self) -> NullType:
+        return self._null_type
 
     def get_type_constructor(
         self, name: str

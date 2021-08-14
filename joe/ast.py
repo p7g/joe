@@ -87,6 +87,11 @@ class Expr(Node):
 
 
 @dataclass(eq=False)
+class NullExpr(Expr):
+    pass
+
+
+@dataclass(eq=False)
 class BoolExpr(Expr):
     value: bool
 

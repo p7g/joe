@@ -21,6 +21,7 @@ class TokenType(enum.IntEnum):
     Import = enum.auto()
     Interface = enum.auto()
     New = enum.auto()
+    Null = enum.auto()
     Return = enum.auto()
     Static = enum.auto()
     Super = enum.auto()
@@ -89,6 +90,7 @@ _keywords = {
     "import": TokenType.Import,
     "interface": TokenType.Interface,
     "new": TokenType.New,
+    "null": TokenType.Null,
     "return": TokenType.Return,
     "static": TokenType.Static,
     "super": TokenType.Super,

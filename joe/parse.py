@@ -351,6 +351,8 @@ class Parser:
             return ast.ThisExpr(location=tok.location)
         elif tok.type in (TokenType.True_, TokenType.False_):
             return ast.BoolExpr(tok.location, tok.type == TokenType.True_)
+        elif tok.type == TokenType.Null:
+            return ast.NullExpr(tok.location)
         else:
             raise JoeSyntaxError(
                 tok.location, f"Unexpected token {tok.type.value}"
