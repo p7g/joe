@@ -353,6 +353,10 @@ class Parser:
             return ast.BoolExpr(tok.location, tok.type == TokenType.True_)
         elif tok.type == TokenType.Null:
             return ast.NullExpr(tok.location)
+        elif tok.type == TokenType.LParen:
+            expr = self._parse_expr()
+            self.tokens.next().expect(TokenType.RParen)
+            return expr
         else:
             raise JoeSyntaxError(
                 tok.location, f"Unexpected token {tok.type.value}"
