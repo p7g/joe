@@ -79,7 +79,8 @@ class Parser:
             ast.Module(
                 name=path_modname(
                     ModulePath.from_file_path(self.filename).dotted_path()
-                ) or "",
+                )
+                or "",
                 class_decls=class_decls,
                 imports=imports,
             )
@@ -371,7 +372,7 @@ class Parser:
             return ast.CharExpr(tok.location, tok.value[1])
         else:
             raise JoeSyntaxError(
-                tok.location, f"Unexpected token {tok.type.value}"
+                tok.location, f"Unexpected token {tok.type.name}"
             )
 
     def _parse_cast_expr(self) -> ast.Expr:
