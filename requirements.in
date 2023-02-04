@@ -1,6 +1,0 @@
-pip-tools
-black
-mypy>=0.910
-jedi
-
-patina>=0.5.0
