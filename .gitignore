@@ -4,4 +4,4 @@ _env
 .ccls-cache
 .mypy_cache
 .vim
-*/__pycache__
+**/*/__pycache__
