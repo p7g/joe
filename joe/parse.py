@@ -4,11 +4,25 @@ from string import ascii_letters, digits
 from typing import Final, cast
 
 from joe._internal.itertools import Peekable
-from joe.ast import (ClassDecl, ClassMember, ConstructorDecl, FieldDecl,
-                     Identifier, InterfaceDecl, InterfaceMember, Location,
-                     MethodDecl, MethodSig, Node, Parameter, Statement, Type,
-                     TypeParameter, valid_class_members,
-                     valid_interface_members)
+from joe.ast import (
+    ClassDecl,
+    ClassMember,
+    ConstructorDecl,
+    FieldDecl,
+    Identifier,
+    InterfaceDecl,
+    InterfaceMember,
+    Location,
+    MethodDecl,
+    MethodSig,
+    Node,
+    Parameter,
+    Statement,
+    Type,
+    TypeParameter,
+    valid_class_members,
+    valid_interface_members,
+)
 
 
 class JoeParseError(Exception):
