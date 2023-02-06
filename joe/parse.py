@@ -1,29 +1,16 @@
+from abc import ABC, abstractmethod
 from collections.abc import Iterable, Iterator
 from enum import Enum, auto
 from string import ascii_letters, digits
-from typing import Final, cast
+from typing import Final, Generic, TypeAlias, TypeVar, cast
 
+from joe._internal.exceptions import unreachable
 from joe._internal.itertools import Peekable
+from joe.ast import *
 
 
 class JoeParseError(Exception):
     pass
-
-
-class Location:
-    __slots__ = ("filename", "line", "column")
-
-    filename: str
-    line: int
-    column: int
-
-    def __init__(self, filename: str, line: int, column: int) -> None:
-        self.filename = filename
-        self.line = line
-        self.column = column
-
-    def __str__(self) -> str:
-        return f"{self.filename}:{self.line}:{self.column}:"
 
 
 class TokenType(Enum):
@@ -120,59 +107,6 @@ def scan(filename: str, chars: Iterable[str]) -> Iterator[Token]:
             raise JoeParseError(f"Unexpected token {c!r} at {location}")
 
 
-class NodeType(Enum):
-    CLASS = auto()
-    CONSTRUCTOR_DECL = auto()
-    FIELD_DECL = auto()
-    GENERIC_PARAM = auto()
-    IDENTIFIER = auto()
-    IMPLEMENTS_LIST = auto()
-    INTERFACE = auto()
-    METHOD_BODY = auto()
-    METHOD_DECL = auto()
-    METHOD_SIG = auto()
-    PARAM = auto()
-    PARAM_LIST = auto()
-    TYPE = auto()
-    TYPE_DECL = auto()
-
-
-class Node:
-    __slots__ = ("type", "location", "children", "text")
-
-    type: NodeType
-    location: Location
-    children: tuple["Node | None", ...]
-    text: str
-
-    def __init__(
-        self,
-        type_: NodeType,
-        location: Location,
-        children: Iterable["Node | None"],
-        text: str = "",
-    ) -> None:
-        self.type = type_
-        self.location = location
-        self.children = tuple(children)
-        self.text = text
-
-    def __repr__(self) -> str:
-        strs = [cast(str, self.type.name), "("]
-        if self.text:
-            strs.append(repr(self.text))
-        else:
-            first = True
-            for child in self.children:
-                if first:
-                    first = False
-                else:
-                    strs.append(", ")
-                strs.append(repr(child))
-        strs.append(")")
-        return "".join(strs)
-
-
 class _Tokens(Iterator[Token]):
     __slots__ = ("tokens",)
 
@@ -215,9 +149,9 @@ def _parse_list(tokens: _Tokens, end: TokenType) -> Iterator[None]:
         yield
 
 
-def _parse_identifier(tokens: _Tokens) -> Node:
+def _parse_identifier(tokens: _Tokens) -> Identifier:
     tok = tokens.expect(TokenType.IDENTIFIER)
-    return Node(NodeType.IDENTIFIER, tok.location, (), tok.text)
+    return Identifier(tok.location, tok.text)
 
 
 def parse(tokens: Iterable[Token]) -> Iterator[Node]:
@@ -230,123 +164,154 @@ def parse(tokens: Iterable[Token]) -> Iterator[Node]:
             break
 
         if tok.type is TokenType.INTERFACE:
-            type_decl = _parse_type_decl(tokens)
-            parent = _parse_type(tokens) if tokens.match(TokenType.EXTENDS) else None
-            tokens.expect(TokenType.LEFT_BRACE)
-            members = []
-            while not tokens.match(TokenType.RIGHT_BRACE):
-                members.append(_parse_interface_member(tokens))
-            yield Node(NodeType.INTERFACE, tok.location, [type_decl, parent, *members])
+            yield _parse_interface_decl(tok.location, tokens)
         elif tok.type is TokenType.CLASS:
-            type_decl = _parse_type_decl(tokens)
-            implements = None
-            if implements_tok := tokens.match(TokenType.IMPLEMENTS):
-                interfaces = []
-                for _ in _parse_list(tokens, TokenType.LEFT_BRACE):
-                    interfaces.append(_parse_type(tokens))
-                if not interfaces:
-                    raise JoeParseError(
-                        f"Unexpected empty interface list at {implements_tok.location}"
-                    )
-                implements = Node(
-                    NodeType.IMPLEMENTS_LIST, interfaces[0].location, interfaces
-                )
-            else:
-                tokens.expect(TokenType.LEFT_BRACE)
-            members = []
-            while not tokens.match(TokenType.RIGHT_BRACE):
-                members.append(_parse_class_member(tokens))
-            yield Node(NodeType.CLASS, tok.location, [type_decl, implements, *members])
+            yield _parse_class_decl(tok.location, tokens)
         else:
             raise NotImplementedError()
 
 
-def _parse_type_decl(tokens: _Tokens) -> Node:
+def _parse_interface_decl(location: Location, tokens: _Tokens) -> InterfaceDecl:
+    name, type_parameters = _parse_type_decl(tokens)
+    parents = [_parse_type(tokens)] if tokens.match(TokenType.EXTENDS) else []
+    tokens.expect(TokenType.LEFT_BRACE)
+    members = []
+    while not tokens.match(TokenType.RIGHT_BRACE):
+        members.append(_parse_interface_member(tokens))
+    return InterfaceDecl(location, name, type_parameters, parents, members)
+
+
+def _parse_class_decl(location: Location, tokens: _Tokens) -> ClassDecl:
+    name, type_parameters = _parse_type_decl(tokens)
+    implements = []
+    if implements_tok := tokens.match(TokenType.IMPLEMENTS):
+        for _ in _parse_list(tokens, TokenType.LEFT_BRACE):
+            implements.append(_parse_type(tokens))
+        if not implements:
+            raise JoeParseError(
+                f"Unexpected empty interface list at {implements_tok.location}"
+            )
+    else:
+        tokens.expect(TokenType.LEFT_BRACE)
+    members = []
+    while not tokens.match(TokenType.RIGHT_BRACE):
+        members.append(_parse_class_member(tokens))
+    return ClassDecl(location, name, type_parameters, implements, members)
+
+
+def _parse_type_decl(tokens: _Tokens) -> tuple[Identifier, list[TypeParameter]]:
     name = _parse_identifier(tokens)
-    args = []
-    if tokens.match(TokenType.LEFT_ANGLE_BRACKET):
-        for _ in _parse_list(tokens, TokenType.RIGHT_ANGLE_BRACKET):
-            args.append(_parse_generic_param(tokens))
-    return Node(NodeType.TYPE_DECL, name.location, [name, *args])
+    if tokens.match(TokenType.LEFT_ANGLE_BRACKET, consume=False):
+        type_param_list = _parse_type_param_list(tokens)
+    else:
+        type_param_list = []
+    return name, type_param_list
 
 
-def _parse_generic_param(tokens: _Tokens) -> Node:
+def _parse_type_param_list(tokens: _Tokens) -> list[TypeParameter]:
+    open_tok = tokens.expect(TokenType.LEFT_ANGLE_BRACKET)
+    params = []
+    for _ in _parse_list(tokens, TokenType.RIGHT_ANGLE_BRACKET):
+        params.append(_parse_generic_param(tokens))
+    if not params:
+        raise JoeParseError(
+            f"Type parameter list must not be empty at {open_tok.location}"
+        )
+    return params
+
+
+def _parse_generic_param(tokens: _Tokens) -> TypeParameter:
     arg_name = _parse_identifier(tokens)
     if tokens.match(TokenType.COLON):
         constraint = _parse_type(tokens)
     else:
         constraint = None
-    return Node(NodeType.GENERIC_PARAM, arg_name.location, [arg_name, constraint])
+    return TypeParameter(arg_name.location, arg_name, constraint)
 
 
-def _parse_type(tokens: _Tokens) -> Node:
+def _parse_type(tokens: _Tokens) -> Type:
     name = _parse_identifier(tokens)
     args = []
     if tokens.match(TokenType.LEFT_ANGLE_BRACKET):
         for _ in _parse_list(tokens, TokenType.RIGHT_ANGLE_BRACKET):
             args.append(_parse_type(tokens))
-    return Node(NodeType.TYPE, name.location, [name, *args])
+    return Type(name.location, name, args)
 
 
-def _parse_interface_member(tokens: _Tokens) -> Node:
-    member = _parse_class_member(tokens)
-    if member.type not in (NodeType.METHOD_DECL, NodeType.METHOD_SIG):
+def _parse_interface_member(tokens: _Tokens) -> InterfaceMember:
+    member = _parse_member(tokens)
+    if not isinstance(member, valid_interface_members):
         raise JoeParseError(
-            f"Unexpected {cast(str, member.type.name)} in interface at {member.location}"
+            f"Unexpected {type(member).__name__} in interface at {member.location}"
         )
     return member
 
 
-def _parse_class_member(tokens: _Tokens) -> Node:
-    type_: Node | None = _parse_type(tokens)
+def _parse_class_member(tokens: _Tokens) -> ClassMember:
+    member = _parse_member(tokens)
+    if not isinstance(member, valid_class_members):
+        raise JoeParseError(
+            f"Unexpected {type(member).__name__} in class at {member.location}"
+        )
+    return member
+
+
+def _parse_member(
+    tokens: _Tokens,
+) -> MethodSig | MethodDecl | ConstructorDecl | FieldDecl:
+    type_ = _parse_type(tokens)
     if tokens.match(TokenType.LEFT_PAREN, consume=False):
-        assert type_ is not None
-        if len(type_.children) > 1:
+        if type_.type_arguments:
             raise JoeParseError(f"Constructor cannot be generic at {type_.location}")
-        name = type_.children[0]
-        assert name is not None
-        type_ = None
+        name = type_.name
+        type_ = Type(name.location, Identifier(name.location, "void"), [])
         is_constructor = True
     else:
         name = _parse_identifier(tokens)
         is_constructor = False
 
-    if is_constructor or tokens.match(TokenType.LEFT_PAREN, consume=False):
+    if (
+        is_constructor
+        or tokens.match(TokenType.LEFT_PAREN, consume=False)
+        or tokens.match(TokenType.LEFT_ANGLE_BRACKET, consume=False)
+    ):
+        if tokens.match(TokenType.LEFT_ANGLE_BRACKET, consume=False):
+            assert not is_constructor
+            type_param_list = _parse_type_param_list(tokens)
+        else:
+            type_param_list = []
         params = _parse_param_list(tokens)
         if tokens.match(TokenType.SEMICOLON):
             if is_constructor:
                 raise JoeParseError(f"Constructor must have a body at {name.location}")
-            assert type_ is not None
-            return Node(NodeType.METHOD_SIG, type_.location, [type_, name, params])
+            return MethodSig(type_.location, type_, name, type_param_list, params)
         body = _parse_method_body(tokens)
         if is_constructor:
-            return Node(NodeType.CONSTRUCTOR_DECL, name.location, [name, params, body])
+            return ConstructorDecl(name.location, name, params, body)
         else:
-            assert type_ is not None
-            return Node(
-                NodeType.METHOD_DECL, type_.location, [type_, name, params, body]
+            return MethodDecl(
+                type_.location, type_, name, type_param_list, params, body
             )
     else:
-        assert type_ is not None
         tokens.expect(TokenType.SEMICOLON)
-        return Node(NodeType.FIELD_DECL, type_.location, [type_, name])
+        return FieldDecl(type_.location, type_, name)
 
 
-def _parse_param_list(tokens: _Tokens) -> Node:
+def _parse_param_list(tokens: _Tokens) -> list[Parameter]:
     left_paren = tokens.expect(TokenType.LEFT_PAREN)
-    args = []
+    params = []
     for _ in _parse_list(tokens, TokenType.RIGHT_PAREN):
-        args.append(_parse_param(tokens))
-    return Node(NodeType.PARAM_LIST, left_paren.location, args)
+        params.append(_parse_param(tokens))
+    return params
 
 
-def _parse_param(tokens: _Tokens) -> Node:
+def _parse_param(tokens: _Tokens) -> Parameter:
     type_ = _parse_type(tokens)
     name = _parse_identifier(tokens)
-    return Node(NodeType.PARAM, type_.location, [type_, name])
+    return Parameter(type_.location, type_, name)
 
 
-def _parse_method_body(tokens: _Tokens) -> Node:
+def _parse_method_body(tokens: _Tokens) -> list[Statement]:
     open_brace = tokens.expect(TokenType.LEFT_BRACE)
     tokens.expect(TokenType.RIGHT_BRACE)
-    return Node(NodeType.METHOD_BODY, open_brace.location, [])
+    return []
