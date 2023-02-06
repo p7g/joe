@@ -8,6 +8,7 @@ readme = "README.md"
 
 [tool.poetry.dependencies]
 python = "^3.11"
+ruff = "^0.0.242"
 
 
 [tool.poetry.group.dev.dependencies]
@@ -43,3 +44,6 @@ warn_redundant_casts = true
 warn_return_any = true
 warn_unreachable = true
 warn_unused_ignores = true
+
+[tool.ruff]
+line-length = 88

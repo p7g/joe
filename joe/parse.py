@@ -1,12 +1,14 @@
-from abc import ABC, abstractmethod
 from collections.abc import Iterable, Iterator
 from enum import Enum, auto
 from string import ascii_letters, digits
-from typing import Final, Generic, TypeAlias, TypeVar, cast
+from typing import Final, cast
 
-from joe._internal.exceptions import unreachable
 from joe._internal.itertools import Peekable
-from joe.ast import *
+from joe.ast import (ClassDecl, ClassMember, ConstructorDecl, FieldDecl,
+                     Identifier, InterfaceDecl, InterfaceMember, Location,
+                     MethodDecl, MethodSig, Node, Parameter, Statement, Type,
+                     TypeParameter, valid_class_members,
+                     valid_interface_members)
 
 
 class JoeParseError(Exception):
@@ -128,7 +130,7 @@ class _Tokens(Iterator[Token]):
 
         if tok.type is not type_:
             raise JoeParseError(
-                f"Unexpected token {tok.text!r}; expected {cast(str, type_.name)} at {tok.location}"
+                f"Unexpected token {tok.text!r}; expected {cast(str, type_.name)} at {tok.location}"  # noqa E501
             )
         return tok
 
@@ -298,7 +300,7 @@ def _parse_member(
 
 
 def _parse_param_list(tokens: _Tokens) -> list[Parameter]:
-    left_paren = tokens.expect(TokenType.LEFT_PAREN)
+    tokens.expect(TokenType.LEFT_PAREN)
     params = []
     for _ in _parse_list(tokens, TokenType.RIGHT_PAREN):
         params.append(_parse_param(tokens))
@@ -312,6 +314,6 @@ def _parse_param(tokens: _Tokens) -> Parameter:
 
 
 def _parse_method_body(tokens: _Tokens) -> list[Statement]:
-    open_brace = tokens.expect(TokenType.LEFT_BRACE)
+    tokens.expect(TokenType.LEFT_BRACE)
     tokens.expect(TokenType.RIGHT_BRACE)
     return []

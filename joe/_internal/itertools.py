@@ -1,6 +1,6 @@
 from collections.abc import Iterable, Iterator
 from enum import Enum, auto
-from typing import Generic, Literal, TypeVar, cast
+from typing import Generic, Literal, TypeVar
 
 T = TypeVar("T")
 

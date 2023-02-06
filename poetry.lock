@@ -196,6 +196,32 @@ docs = ["furo (>=2022.12.7)", "proselint (>=0.13)", "sphinx (>=5.3)", "sphinx-au
 test = ["appdirs (==1.4.4)", "covdefaults (>=2.2.2)", "pytest (>=7.2)", "pytest-cov (>=4)", "pytest-mock (>=3.10)"]
 
 [[package]]
+name = "ruff"
+version = "0.0.242"
+description = "An extremely fast Python linter, written in Rust."
+category = "main"
+optional = false
+python-versions = ">=3.7"
+files = [
+    {file = "ruff-0.0.242-py3-none-macosx_10_7_x86_64.whl", hash = "sha256:a93cdd87f0f16d1224321a90804921159d42d8cddb4e9376abd7b55df96e0eab"},
+    {file = "ruff-0.0.242-py3-none-macosx_10_9_x86_64.macosx_11_0_arm64.macosx_10_9_universal2.whl", hash = "sha256:dd406b18cd3f94cbf0e7ac3046d99a987d935b0423fde23b2ac9a01b05202810"},
+    {file = "ruff-0.0.242-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:35019a20992cfdf82b772c08df5c1ac71de55905ede8a5c4428a689930b72010"},
+    {file = "ruff-0.0.242-py3-none-manylinux_2_17_armv7l.manylinux2014_armv7l.whl", hash = "sha256:69012625da1f1a5c01784dbe30366d8a6bd038d79200f7622e9c8251f7747fcd"},
+    {file = "ruff-0.0.242-py3-none-manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:44f1f014b85ed67a43a183dd43a6c82519eaaeeeb8ef9b29ba4d08b90dc3ee32"},
+    {file = "ruff-0.0.242-py3-none-manylinux_2_17_ppc64.manylinux2014_ppc64.whl", hash = "sha256:1d67417e36c48a0c99bb36c3158b1c1f15d9ebd07157076d6410d7bc4fe7ec53"},
+    {file = "ruff-0.0.242-py3-none-manylinux_2_17_ppc64le.manylinux2014_ppc64le.whl", hash = "sha256:52e0122098e8d9caa9acdfc56f62c81f39ce7f810166a7eedd257939eb4cf925"},
+    {file = "ruff-0.0.242-py3-none-manylinux_2_17_s390x.manylinux2014_s390x.whl", hash = "sha256:918c1ed374ea244c9a87a74ab6e7359fdda009798b6742002cd2363200c93868"},
+    {file = "ruff-0.0.242-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:c0609d6b154d6287757a7760c802b5e78b8ec360bc8839b21d4b6db92106014f"},
+    {file = "ruff-0.0.242-py3-none-musllinux_1_2_aarch64.whl", hash = "sha256:12cc8a434807378cb01533431c128229c2ebf90f66473075b2d6a1d383be2efa"},
+    {file = "ruff-0.0.242-py3-none-musllinux_1_2_armv7l.whl", hash = "sha256:0ebdd43b11bbfea93d9ffe287731857abdb269910933b26620d30dbd3fb44b38"},
+    {file = "ruff-0.0.242-py3-none-musllinux_1_2_i686.whl", hash = "sha256:1c37dbe515be5c4fa423cfe354a9556e88532a2040f2d9603457cfce7c76fe0c"},
+    {file = "ruff-0.0.242-py3-none-musllinux_1_2_x86_64.whl", hash = "sha256:fe0175ee58f1456e527a7d05ebb6b8604cdac7e1af1ca5042f4499e8d2701a67"},
+    {file = "ruff-0.0.242-py3-none-win32.whl", hash = "sha256:d659293ae788bcabd936e902a5a1c48734b0f7b51bce69f21383a1ec553ad216"},
+    {file = "ruff-0.0.242-py3-none-win_amd64.whl", hash = "sha256:c4fd6907e08a66e1df81eba682bb011c2b21d78c07fdb9941dfc500aa5530462"},
+    {file = "ruff-0.0.242.tar.gz", hash = "sha256:788ce233f0608074961f12a6a9a758695e673e7e56d14082f33db27d57031fa3"},
+]
+
+[[package]]
 name = "typing-extensions"
 version = "4.4.0"
 description = "Backported and Experimental Type Hints for Python 3.7+"
@@ -210,4 +236,4 @@ files = [
 [metadata]
 lock-version = "2.0"
 python-versions = "^3.11"
-content-hash = "48c338fe185954709258cebec5517662df86d3bc09f6732279fbbb2abc068d56"
+content-hash = "3cbc938e88c2a76ba9f1bc7068ff8f252a37597276a719d1001d224803482dfd"
