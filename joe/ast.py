@@ -62,7 +62,7 @@ class Node(ABC):
         self.location = location
 
     @abstractmethod
-    def visit(self, visitor: AstVisitor[T]) -> T:
+    def accept(self, visitor: AstVisitor[T]) -> T:
         ...
 
 
@@ -73,7 +73,7 @@ class Identifier(Node):
         super().__init__(location)
         self.name = name
 
-    def visit(self, visitor: AstVisitor[T]) -> T:
+    def accept(self, visitor: AstVisitor[T]) -> T:
         return visitor.visit_identifier(self)
 
 
@@ -87,7 +87,7 @@ class Type(Node):
         self.name = name
         self.type_arguments = tuple(type_arguments)
 
-    def visit(self, visitor: AstVisitor[T]) -> T:
+    def accept(self, visitor: AstVisitor[T]) -> T:
         return visitor.visit_type(self)
 
 
@@ -101,7 +101,7 @@ class TypeParameter(Node):
         self.name = name
         self.constraint = constraint
 
-    def visit(self, visitor: AstVisitor[T]) -> T:
+    def accept(self, visitor: AstVisitor[T]) -> T:
         return visitor.visit_type_parameter(self)
 
 
@@ -113,7 +113,7 @@ class Parameter(Node):
         self.type = type_
         self.name = name
 
-    def visit(self, visitor: AstVisitor[T]) -> T:
+    def accept(self, visitor: AstVisitor[T]) -> T:
         return visitor.visit_parameter(self)
 
 
@@ -134,7 +134,7 @@ class MethodSig(Node):
         self.type_parameters = tuple(type_parameters)
         self.parameters = tuple(parameters)
 
-    def visit(self, visitor: AstVisitor[T]) -> T:
+    def accept(self, visitor: AstVisitor[T]) -> T:
         return visitor.visit_method_sig(self)
 
 
@@ -156,7 +156,7 @@ class ConstructorDecl(Node):
         self.parameters = tuple(parameters)
         self.body = tuple(body)
 
-    def visit(self, visitor: AstVisitor[T]) -> T:
+    def accept(self, visitor: AstVisitor[T]) -> T:
         return visitor.visit_constructor_decl(self)
 
 
@@ -179,7 +179,7 @@ class MethodDecl(Node):
         self.parameters = tuple(parameters)
         self.body = tuple(body)
 
-    def visit(self, visitor: AstVisitor[T]) -> T:
+    def accept(self, visitor: AstVisitor[T]) -> T:
         return visitor.visit_method_decl(self)
 
 
@@ -191,7 +191,7 @@ class FieldDecl(Node):
         self.type = type_
         self.name = name
 
-    def visit(self, visitor: AstVisitor[T]) -> T:
+    def accept(self, visitor: AstVisitor[T]) -> T:
         return visitor.visit_field_decl(self)
 
 
@@ -218,7 +218,7 @@ class ClassDecl(Node):
         self.implements = tuple(implements)
         self.members = tuple(members)
 
-    def visit(self, visitor: AstVisitor[T]) -> T:
+    def accept(self, visitor: AstVisitor[T]) -> T:
         return visitor.visit_class_decl(self)
 
 
@@ -239,5 +239,5 @@ class InterfaceDecl(Node):
         self.extends = tuple(extends)
         self.members = tuple(members)
 
-    def visit(self, visitor: AstVisitor[T]) -> T:
+    def accept(self, visitor: AstVisitor[T]) -> T:
         return visitor.visit_interface_decl(self)

@@ -44,6 +44,7 @@ class TokenType(Enum):
     RIGHT_BRACE = auto()
     RIGHT_PAREN = auto()
     SEMICOLON = auto()
+    VOID = auto()
 
 
 class Token:
@@ -76,6 +77,7 @@ _keywords: Final = {
     "extends": TokenType.EXTENDS,
     "implements": TokenType.IMPLEMENTS,
     "interface": TokenType.INTERFACE,
+    "void": TokenType.VOID,
 }
 
 
@@ -246,6 +248,8 @@ def _parse_generic_param(tokens: _Tokens) -> TypeParameter:
 
 
 def _parse_type(tokens: _Tokens) -> Type:
+    if tok := tokens.match(TokenType.VOID):
+        return Type(tok.location, Identifier(tok.location, "void"), [])
     name = _parse_identifier(tokens)
     args = []
     if tokens.match(TokenType.LEFT_ANGLE_BRACKET):
