@@ -24,10 +24,8 @@ class TypeParameter:
     def __str__(self) -> str:
         return f"{self.name}: {self.constraint}" if self.constraint else self.name
 
-    def map(self, visitor: "TypeVisitor[Type]") -> "TypeParameter":
-        return TypeParameter(
-            self.name, self.constraint.accept(visitor) if self.constraint else None
-        )
+    def update(self, visitor: "TypeVisitor[Type]") -> None:
+        self.constraint = self.constraint.accept(visitor) if self.constraint else None
 
     def run_visitor(self, visitor: "TypeVisitor[None]") -> None:
         if self.constraint:
@@ -60,13 +58,11 @@ class Method:
         params = ", ".join(map(str, self.parameter_types))
         return f"{self.return_type} {self.name}{type_params}({params})"
 
-    def map(self, visitor: "TypeVisitor[Type]") -> "Method":
-        return Method(
-            self.name,
-            [type_param.map(visitor) for type_param in self.type_parameters],
-            self.return_type.accept(visitor),
-            [ty.accept(visitor) for ty in self.parameter_types],
-        )
+    def update(self, visitor: "TypeVisitor[Type]") -> None:
+        for param in self.type_parameters:
+            param.update(visitor)
+        self.return_type = self.return_type.accept(visitor)
+        self.parameter_types = tuple(ty.accept(visitor) for ty in self.parameter_types)
 
     def run_visitor(self, visitor: "TypeVisitor[None]") -> None:
         for type_param in self.type_parameters:
@@ -93,8 +89,8 @@ class Field:
         self.name = name
         self.type = type_
 
-    def map(self, visitor: "TypeVisitor[Type]") -> "Field":
-        return Field(self.name, self.type.accept(visitor))
+    def update(self, visitor: "TypeVisitor[Type]") -> None:
+        self.type = self.type.accept(visitor)
 
     def run_visitor(self, visitor: "TypeVisitor[None]") -> None:
         self.type.accept(visitor)
@@ -163,17 +159,16 @@ class TypeInfo:
         body = f"\n{body}\n" if body else ""
         return f"{kind} {self}<{type_params}> {implements}{{{body}}}"
 
-    def map(self, visitor: "TypeVisitor[Type]") -> "TypeInfo":
-        return TypeInfo(
-            self.name,
-            self.is_concrete,
-            [param.map(visitor) for param in self.type_parameters],
-            [field.map(visitor) for field in self.fields.values()],
-            [method.map(visitor) for method in self.methods.values()],
-            [method.map(visitor) for method in self.static_methods.values()],
-            [ty.accept(visitor) for ty in self.implements],
-            self.is_resolved,
-        )
+    def update(self, visitor: "TypeVisitor[Type]") -> None:
+        for param in self.type_parameters:
+            param.update(visitor)
+        for field in self.fields.values():
+            field.update(visitor)
+        for method in self.methods.values():
+            method.update(visitor)
+        for method in self.static_methods.values():
+            method.update(visitor)
+        self.implements = tuple(ty.accept(visitor) for ty in self.implements)
 
     def run_visitor(self, visitor: "TypeVisitor[None]") -> None:
         for param in self.type_parameters:
@@ -211,6 +206,24 @@ class Type(ABC):
         if not isinstance(other, Type):
             return NotImplemented
         return is_same_type(self, other)
+
+
+class TypeVariable(Type):
+    __slots__ = ("name", "constraint")
+
+    def __init__(self, name: str, constraint: Type) -> None:
+        super().__init__()
+        self.name = name
+        self.constraint = constraint
+
+    def accept(self, visitor: "TypeVisitor[T]") -> T:
+        return visitor.visit_type_variable(self)
+
+    def __str__(self) -> str:
+        return f"{self.name}*"
+
+    def __repr__(self) -> str:
+        return f"{self.name}:{self.constraint}"
 
 
 class TopType(Type):
@@ -284,12 +297,15 @@ class TypeVisitor(Generic[T]):
     def visit_top_type(self, top_type: TopType) -> T:
         unreachable()
 
+    def visit_type_variable(self, type_variable: TypeVariable) -> T:
+        unreachable()
+
 
 class SubstituteTypeVariables(TypeVisitor[Type]):
     __slots__ = ("environment", "locals")
 
     def __init__(
-        self, environment: Mapping[str, TypeInfo], locals_: Mapping[str, Type | None]
+        self, environment: Mapping[str, TypeInfo], locals_: Mapping[str, Type]
     ) -> None:
         self.environment = environment
         self.locals = locals_
@@ -299,7 +315,7 @@ class SubstituteTypeVariables(TypeVisitor[Type]):
         if type_name in self.locals:
             if instance.arguments:
                 raise JoeTypeError("no higher order types")
-            return self.locals[type_name] or instance
+            return self.locals[type_name].accept(self)
 
         new_arguments = [ty.accept(self) for ty in instance.arguments]
         if instance.type_info.is_resolved:
@@ -307,6 +323,7 @@ class SubstituteTypeVariables(TypeVisitor[Type]):
         env_value = self.environment.get(type_name)
         if not env_value:
             raise JoeTypeError("unknown type", type_name)
+        assert env_value.is_resolved
         return instance.copy_modified(type_info=env_value, arguments=new_arguments)
 
     def visit_void_type(self, void_type: VoidType) -> Type:
@@ -314,6 +331,12 @@ class SubstituteTypeVariables(TypeVisitor[Type]):
 
     def visit_top_type(self, top_type: TopType) -> Type:
         return top_type
+
+    def visit_type_variable(self, type_variable: TypeVariable) -> Type:
+        local = self.locals.get(type_variable.name)
+        if local and not isinstance(local, TypeVariable):
+            return local.accept(self)
+        return TypeVariable(type_variable.name, type_variable.constraint.accept(self))
 
 
 def _unresolved_typeinfo(name: str) -> TypeInfo:
@@ -399,6 +422,14 @@ def is_same_type(a: Type, b: Type) -> bool:
     # - all type arguments are the same
     if isinstance(a, VoidType) or isinstance(b, VoidType):
         return isinstance(a, VoidType) and isinstance(b, VoidType)
+    elif isinstance(a, TopType) or isinstance(b, TopType):
+        return isinstance(a, TopType) and isinstance(b, TopType)
+    elif isinstance(a, TypeVariable) or isinstance(b, TypeVariable):
+        if isinstance(a, TypeVariable):
+            a = a.constraint
+        if isinstance(b, TypeVariable):
+            b = b.constraint
+        return is_same_type(a, b)
     assert isinstance(a, Instance) and isinstance(b, Instance)
     return a.type_info == b.type_info and all(
         aa == bb for aa, bb in zip(a.arguments, b.arguments, strict=True)
@@ -406,16 +437,25 @@ def is_same_type(a: Type, b: Type) -> bool:
 
 
 def is_subtype(a: Type, b: Type) -> bool:
+    if is_same_type(a, b):
+        return True
+
     # True if:
     # - b is an interface type
     # - a is a type that implements or extends that interface
     # - all type arguments are the same (TODO covariance and contravariance)
     if isinstance(a, VoidType) or isinstance(b, VoidType):
         return isinstance(a, VoidType) and isinstance(b, VoidType)
-    elif isinstance(b, TopType):
-        return True
+    elif isinstance(a, TopType) or isinstance(b, TopType):
+        return isinstance(b, TopType)
+    elif isinstance(a, TypeVariable) or isinstance(b, TypeVariable):
+        if isinstance(a, TypeVariable):
+            a = a.constraint
+        if isinstance(b, TypeVariable):
+            b = b.constraint
+        return is_subtype(a, b)
 
-    assert isinstance(a, Instance) and isinstance(b, Instance)
+    assert isinstance(a, Instance) and isinstance(b, Instance), f"{a!r} {b!r}"
 
     # No subclassing
     if b.type_info.is_concrete:

@@ -6,6 +6,7 @@ from joe.typecheck import (
     SubstituteTypeVariables,
     TopType,
     TypeInfo,
+    TypeVariable,
     TypeVisitor,
     VoidType,
     _initialize_typeinfo,
@@ -68,11 +69,15 @@ for node in parse(scan("<script>", text)):
 environment["Integer"] = TypeInfo("Integer", True, [], [], [], [], [])
 environment["String"] = TypeInfo("String", False, [], [], [], [], [])
 
-for name, type_ in environment.items():
+for decl in environment.values():
     visitor = SubstituteTypeVariables(
-        environment, {p.name: None for p in type_.type_parameters}
+        environment,
+        {
+            p.name: TypeVariable(p.name, p.constraint or TopType())
+            for p in decl.type_parameters
+        },
     )
-    environment[name] = type_.map(visitor)
+    decl.update(visitor)
 
     # print(repr(environment[name]))
     # from pprint import pprint
@@ -81,7 +86,7 @@ for name, type_ in environment.items():
 
 # checks WE CAN DO:
 # [x] Instance arity
-# [ ] type parameter constraints
+# [x] type parameter constraints
 # [ ] void in weird places
 # [ ] leftover type variables
 # [ ] interface implementation (make sure has all methods with right types)
@@ -91,6 +96,28 @@ for name, type_ in environment.items():
 #   - return type covariance
 #   - parameter type contravariance
 # - self-referential types
+
+
+class CheckAllResolved(TypeVisitor[None]):
+    def visit_instance(self, instance: Instance) -> None:
+        for argument in instance.arguments:
+            argument.accept(self)
+        if not instance.type_info.is_resolved:
+            raise JoeTypeError("still unresolved", instance.type_info)
+
+    def visit_void_type(self, void_type: VoidType) -> None:
+        pass
+
+    def visit_top_type(self, top_type: TopType) -> None:
+        pass
+
+    def visit_type_variable(self, type_variable: TypeVariable) -> None:
+        type_variable.constraint.accept(self)
+
+
+check_resolved = CheckAllResolved()
+for decl in environment.values():
+    decl.run_visitor(check_resolved)
 
 
 class CheckInstanceArity(TypeVisitor[None]):
@@ -104,10 +131,43 @@ class CheckInstanceArity(TypeVisitor[None]):
     def visit_top_type(self, top_type: TopType) -> None:
         pass
 
+    def visit_type_variable(self, type_variable: TypeVariable) -> None:
+        type_variable.constraint.accept(self)
+
 
 check_arity = CheckInstanceArity()
 for decl in environment.values():
     decl.run_visitor(check_arity)
+
+
+class CheckTypeParameterConstraints(TypeVisitor[None]):
+    def visit_instance(self, instance: Instance) -> None:
+        for argument in instance.arguments:
+            argument.accept(self)
+        for type_param, argument in zip(
+            instance.type_info.type_parameters, instance.arguments, strict=True
+        ):
+            if type_param.constraint and not is_subtype(
+                argument, type_param.constraint
+            ):
+                raise JoeTypeError(
+                    "doesn't match constraint", argument, type_param.constraint
+                )
+
+    def visit_void_type(self, void_type: VoidType) -> None:
+        pass
+
+    def visit_top_type(self, top_type: TopType) -> None:
+        pass
+
+    def visit_type_variable(self, type_variable: TypeVariable) -> None:
+        type_variable.constraint.accept(self)
+
+
+check_constraints = CheckTypeParameterConstraints()
+for decl in environment.values():
+    decl.run_visitor(check_constraints)
+
 
 abc = Instance(environment["Abc"], [Instance(environment["String"], [])])
 zyx = Instance(environment["Zyx"], [Instance(environment["String"], [])])
