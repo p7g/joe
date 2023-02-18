@@ -10,6 +10,10 @@ T = TypeVar("T")
 Environment: TypeAlias = ChainMap[str, "Type"]
 
 
+class JoeTypeError(Exception):
+    pass
+
+
 class TypeParameter:
     __slots__ = ("name", "constraint")
 
@@ -24,6 +28,10 @@ class TypeParameter:
         return TypeParameter(
             self.name, self.constraint.accept(visitor) if self.constraint else None
         )
+
+    def run_visitor(self, visitor: "TypeVisitor[None]") -> None:
+        if self.constraint:
+            self.constraint.accept(visitor)
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, TypeParameter):
@@ -60,6 +68,13 @@ class Method:
             [ty.accept(visitor) for ty in self.parameter_types],
         )
 
+    def run_visitor(self, visitor: "TypeVisitor[None]") -> None:
+        for type_param in self.type_parameters:
+            type_param.run_visitor(visitor)
+        self.return_type.accept(visitor)
+        for ty in self.parameter_types:
+            ty.accept(visitor)
+
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, Method):
             return NotImplemented
@@ -80,6 +95,9 @@ class Field:
 
     def map(self, visitor: "TypeVisitor[Type]") -> "Field":
         return Field(self.name, self.type.accept(visitor))
+
+    def run_visitor(self, visitor: "TypeVisitor[None]") -> None:
+        self.type.accept(visitor)
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, Field):
@@ -125,6 +143,8 @@ class TypeInfo:
         return self.name
 
     def __repr__(self) -> str:
+        if not self.is_resolved:
+            return str(self)
         kind = "class" if self.is_concrete else "interface"
         type_params = ", ".join(map(str, self.type_parameters))
         fields = "\n".join(
@@ -155,6 +175,18 @@ class TypeInfo:
             self.is_resolved,
         )
 
+    def run_visitor(self, visitor: "TypeVisitor[None]") -> None:
+        for param in self.type_parameters:
+            param.run_visitor(visitor)
+        for field in self.fields.values():
+            field.run_visitor(visitor)
+        for method in self.methods.values():
+            method.run_visitor(visitor)
+        for method in self.static_methods.values():
+            method.run_visitor(visitor)
+        for ty in self.implements:
+            ty.accept(visitor)
+
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, TypeInfo):
             return NotImplemented
@@ -181,26 +213,20 @@ class Type(ABC):
         return is_same_type(self, other)
 
 
+class TopType(Type):
+    def accept(self, visitor: "TypeVisitor[T]") -> T:
+        return visitor.visit_top_type(self)
+
+    def __str__(self) -> str:
+        return "⊤"
+
+
 class VoidType(Type):
     def accept(self, visitor: "TypeVisitor[T]") -> T:
         return visitor.visit_void_type(self)
 
     def __str__(self) -> str:
         return "void"
-
-
-class TypeVariable(Type):
-    __slots__ = ("name",)
-
-    def __init__(self, name: str) -> None:
-        super().__init__()
-        self.name = name
-
-    def accept(self, visitor: "TypeVisitor[T]") -> T:
-        return visitor.visit_type_variable(self)
-
-    def __str__(self) -> str:
-        return f"{self.name}*"
 
 
 class Instance(Type):
@@ -240,7 +266,7 @@ class Instance(Type):
         )
 
     def supertypes(self) -> Iterable["Type"]:
-        visitor = SubstituteTypeVariables(self._env())
+        visitor = SubstituteTypeVariables({}, self._env())
         for ty in self.type_info.implements:
             concrete_ty = ty.accept(visitor)
             assert isinstance(concrete_ty, Instance)
@@ -255,35 +281,39 @@ class TypeVisitor(Generic[T]):
     def visit_void_type(self, void_type: VoidType) -> T:
         unreachable()
 
-    def visit_type_variable(self, type_variable: TypeVariable) -> T:
+    def visit_top_type(self, top_type: TopType) -> T:
         unreachable()
 
 
 class SubstituteTypeVariables(TypeVisitor[Type]):
-    __slots__ = ("environment",)
+    __slots__ = ("environment", "locals")
 
-    def __init__(self, environment: Mapping[str, Type | TypeInfo]) -> None:
+    def __init__(
+        self, environment: Mapping[str, TypeInfo], locals_: Mapping[str, Type | None]
+    ) -> None:
         self.environment = environment
-
-    def visit_type_variable(self, type_variable: TypeVariable) -> Type:
-        env_value = self.environment.get(type_variable.name)
-        if not env_value:
-            return type_variable
-        elif isinstance(env_value, Type):
-            return env_value
-        else:
-            return Instance(env_value, [])
+        self.locals = locals_
 
     def visit_instance(self, instance: Instance) -> Type:
+        type_name = instance.type_info.name
+        if type_name in self.locals:
+            if instance.arguments:
+                raise JoeTypeError("no higher order types")
+            return self.locals[type_name] or instance
+
         new_arguments = [ty.accept(self) for ty in instance.arguments]
         if instance.type_info.is_resolved:
             return instance.copy_modified(arguments=new_arguments)
-        env_value = self.environment[instance.type_info.name]
-        assert isinstance(env_value, TypeInfo), instance.type_info.name
+        env_value = self.environment.get(type_name)
+        if not env_value:
+            raise JoeTypeError("unknown type", type_name)
         return instance.copy_modified(type_info=env_value, arguments=new_arguments)
 
     def visit_void_type(self, void_type: VoidType) -> Type:
         return void_type
+
+    def visit_top_type(self, top_type: TopType) -> Type:
+        return top_type
 
 
 def _unresolved_typeinfo(name: str) -> TypeInfo:
@@ -293,8 +323,6 @@ def _unresolved_typeinfo(name: str) -> TypeInfo:
 def _compile_type(type_ast: ast.Type) -> Type:
     if type_ast.name.name == "void":
         return VoidType()
-    elif not type_ast.type_arguments:
-        return TypeVariable(type_ast.name.name)
     return Instance(
         _unresolved_typeinfo(type_ast.name.name),
         [_compile_type(arg) for arg in type_ast.type_arguments],
@@ -384,6 +412,9 @@ def is_subtype(a: Type, b: Type) -> bool:
     # - all type arguments are the same (TODO covariance and contravariance)
     if isinstance(a, VoidType) or isinstance(b, VoidType):
         return isinstance(a, VoidType) and isinstance(b, VoidType)
+    elif isinstance(b, TopType):
+        return True
+
     assert isinstance(a, Instance) and isinstance(b, Instance)
 
     # No subclassing

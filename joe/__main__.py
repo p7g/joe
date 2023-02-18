@@ -2,9 +2,12 @@ from joe import ast
 from joe.parse import parse, scan
 from joe.typecheck import (
     Instance,
+    JoeTypeError,
     SubstituteTypeVariables,
-    Type,
+    TopType,
     TypeInfo,
+    TypeVisitor,
+    VoidType,
     _initialize_typeinfo,
     is_subtype,
 )
@@ -31,7 +34,7 @@ class Abc<T: String> implements Xyz<T, Integer> {
 }
 """
 
-environment: dict[str, TypeInfo | Type] = {}
+environment: dict[str, TypeInfo] = {}
 for node in parse(scan("<script>", text)):
     assert isinstance(node, (ast.ClassDecl, ast.InterfaceDecl))
     type_info = _initialize_typeinfo(node)
@@ -61,43 +64,52 @@ for node in parse(scan("<script>", text)):
 #     return {k: recursive_vars(v) for k, v in varses.items()}
 
 
-integer_type = TypeInfo("Integer", True, [], [], [], [], [])
-string_type = TypeInfo("String", False, [], [], [], [], [])
-
 # TODO: prelude
-environment["Integer"] = Instance(integer_type, [])
-environment["String"] = Instance(string_type, [])
+environment["Integer"] = TypeInfo("Integer", True, [], [], [], [], [])
+environment["String"] = TypeInfo("String", False, [], [], [], [], [])
 
-visitor = SubstituteTypeVariables(environment)
 for name, type_ in environment.items():
-    if isinstance(type_, TypeInfo):
-        environment[name] = type_.map(visitor)
-    else:
-        environment[name] = type_.accept(visitor)
+    visitor = SubstituteTypeVariables(
+        environment, {p.name: None for p in type_.type_parameters}
+    )
+    environment[name] = type_.map(visitor)
 
-    # print(repr(type_info))
+    # print(repr(environment[name]))
     # from pprint import pprint
     # pprint(recursive_vars(type_info))
 
 
-Abc = environment["Abc"]
-Zyx = environment["Zyx"]
-assert isinstance(Abc, TypeInfo) and isinstance(Zyx, TypeInfo)
-abc = Instance(Abc, [Instance(string_type, [])])
-zyx = Instance(Zyx, [Instance(string_type, [])])
-
-print(is_subtype(abc, zyx))
-
-
 # checks WE CAN DO:
-# - Instance arity
-# - type parameter constraints
-# - void in weird places
-# - leftover type variables
-# - interface implementation (make sure has all methods with right types)
+# [x] Instance arity
+# [ ] type parameter constraints
+# [ ] void in weird places
+# [ ] leftover type variables
+# [ ] interface implementation (make sure has all methods with right types)
 #
 # CONSIDERATIONS
 # - for implementations of interface methods:
 #   - return type covariance
 #   - parameter type contravariance
 # - self-referential types
+
+
+class CheckInstanceArity(TypeVisitor[None]):
+    def visit_instance(self, instance: Instance) -> None:
+        if len(instance.arguments) != len(instance.type_info.type_parameters):
+            raise JoeTypeError("Incorrect number of arguments")
+
+    def visit_void_type(self, void_type: VoidType) -> None:
+        pass
+
+    def visit_top_type(self, top_type: TopType) -> None:
+        pass
+
+
+check_arity = CheckInstanceArity()
+for decl in environment.values():
+    decl.run_visitor(check_arity)
+
+abc = Instance(environment["Abc"], [Instance(environment["String"], [])])
+zyx = Instance(environment["Zyx"], [Instance(environment["String"], [])])
+
+print(is_subtype(abc, zyx))
