@@ -1,3 +1,5 @@
+from typing import cast
+
 from joe import ast
 from joe.parse import parse, scan
 from joe.typecheck import (
@@ -29,6 +31,8 @@ class Abc<T: String> implements Xyz<T, Integer> {
 
     Abc() {
     }
+
+    Integer somemeth(T arg) {}
 
     void method(Integer a) {
     }
@@ -90,6 +94,7 @@ for decl in environment.values():
 # [ ] void in weird places
 # [ ] leftover type variables
 # [ ] interface implementation (make sure has all methods with right types)
+# [ ] Method instance arity
 #
 # CONSIDERATIONS
 # - for implementations of interface methods:
@@ -172,4 +177,12 @@ for decl in environment.values():
 abc = Instance(environment["Abc"], [Instance(environment["String"], [])])
 zyx = Instance(environment["Zyx"], [Instance(environment["String"], [])])
 
-print(is_subtype(abc, zyx))
+print("Abc < Xyz", is_subtype(abc, zyx))
+
+somemeth_abc = abc.get_method("somemeth", [], [Instance(environment["Integer"], [])])
+somemeth_xyz = cast(Instance, next(iter(abc.supertypes()))).get_method(
+    "somemeth", [], [Instance(environment["Integer"], [])]
+)
+
+print("Abc.somemeth < Xyz.somemeth", somemeth_abc.implements(somemeth_xyz))
+print(abc.get_method("somemeth", [], [Instance(environment["Integer"], [])]))

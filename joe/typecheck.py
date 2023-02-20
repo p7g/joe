@@ -19,22 +19,16 @@ class TypeParameter:
 
     def __init__(self, name: str, constraint: "Type | None") -> None:
         self.name = name
-        self.constraint = constraint
+        self.constraint = constraint or TopType()
 
     def __str__(self) -> str:
-        return f"{self.name}: {self.constraint}" if self.constraint else self.name
+        return f"{self.name}: {self.constraint}"
 
     def update(self, visitor: "TypeVisitor[Type]") -> None:
-        self.constraint = self.constraint.accept(visitor) if self.constraint else None
+        self.constraint = self.constraint.accept(visitor)
 
     def run_visitor(self, visitor: "TypeVisitor[None]") -> None:
-        if self.constraint:
-            self.constraint.accept(visitor)
-
-    def __eq__(self, other: object) -> bool:
-        if not isinstance(other, TypeParameter):
-            return NotImplemented
-        return self.name == other.name and self.constraint == other.constraint
+        self.constraint.accept(visitor)
 
 
 class Method:
@@ -71,16 +65,6 @@ class Method:
         for ty in self.parameter_types:
             ty.accept(visitor)
 
-    def __eq__(self, other: object) -> bool:
-        if not isinstance(other, Method):
-            return NotImplemented
-        return (
-            self.name == other.name
-            and self.type_parameters == other.type_parameters
-            and self.return_type == other.return_type
-            and self.parameter_types == other.parameter_types
-        )
-
 
 class Field:
     __slots__ = ("name", "type")
@@ -94,11 +78,6 @@ class Field:
 
     def run_visitor(self, visitor: "TypeVisitor[None]") -> None:
         self.type.accept(visitor)
-
-    def __eq__(self, other: object) -> bool:
-        if not isinstance(other, Field):
-            return NotImplemented
-        return self.name == other.name and self.type == other.type
 
 
 class TypeInfo:
@@ -181,20 +160,6 @@ class TypeInfo:
             method.run_visitor(visitor)
         for ty in self.implements:
             ty.accept(visitor)
-
-    def __eq__(self, other: object) -> bool:
-        if not isinstance(other, TypeInfo):
-            return NotImplemented
-        return (
-            self.name == other.name
-            and self.is_concrete == other.is_concrete
-            and self.type_parameters == other.type_parameters
-            and self.fields == other.fields
-            and self.methods == other.methods
-            and self.static_methods == other.static_methods
-            and self.implements == other.implements
-            and self.is_resolved == other.is_resolved
-        )
 
 
 class Type(ABC):
@@ -286,6 +251,121 @@ class Instance(Type):
             yield concrete_ty
             yield from concrete_ty.supertypes()
 
+    def get_method(
+        self, name: str, type_arguments: Iterable[Type], argument_types: Iterable[Type]
+    ) -> "MethodInstance":
+        method = self.type_info.methods[name]
+
+        type_arguments = tuple(type_arguments)
+        if not type_arguments:
+            bound_type_variables = bind_type_variables_from_arguments(
+                self, method, argument_types
+            )
+            missing = set(bound_type_variables) - {
+                param.name for param in method.type_parameters
+            }
+            if missing:
+                raise JoeTypeError(
+                    f"Cannot infer type(s) of {','.join(missing)}, must be specified explicitly"  # noqa: E501
+                )
+            type_arguments = tuple(
+                bound_type_variables[param.name] for param in method.type_parameters
+            )
+
+        return MethodInstance(self, method, type_arguments)
+
+
+# left to right, parallel depth-first traversal of types
+# if at any point the passed type is incompatible, abort
+# upon encountering a type variable:
+# - if bound in instance, get the real type from the instance
+# - otherwise declare it equal to the type at same position in other type
+# Afterward, if any types are unbound, require explicit type arguments
+
+
+def bind_type_variables_from_arguments(
+    self_type: Instance, method: Method, arguments: Iterable[Type]
+) -> dict[str, Type]:
+    bound = {}
+    method_type_variables = {param.name for param in method.type_parameters}
+    # for name, value in self_type._env().items():
+    #     if name in method_arg_names:
+    #         continue
+    #     bound[name] = value
+
+    def search(a: Type, b: Type) -> None:
+        if isinstance(a, TypeVariable):
+            if a.name not in bound and a.name in method_type_variables:
+                bound[a.name] = b
+            return
+        elif isinstance(a, Instance):
+            # TODO: it may still be possible to infer the types when the type
+            # infos are not the same for example Collection<T> and
+            # HashMap<String, Integer> could maybe infer T=Integer
+            if not isinstance(b, Instance) or a.type_info != b.type_info:
+                return
+            for a2, b2 in zip(a.arguments, b.arguments, strict=True):
+                search(a2, b2)
+        else:
+            raise NotImplementedError(a)
+
+    for param, arg in zip(method.parameter_types, arguments, strict=True):
+        search(param, arg)
+
+    return bound
+
+
+class MethodInstance:
+    __slots__ = ("self_type", "method", "arguments")
+
+    def __init__(
+        self, self_type: Instance, method: Method, arguments: Iterable[Type]
+    ) -> None:
+        super().__init__()
+        self.self_type = self_type
+        self.method = method
+        self.arguments = tuple(arguments)
+
+    def __str__(self) -> str:
+        arguments = f"<{', '.join(map(str, self.arguments))}>" if self.arguments else ""
+        return f"{self.self_type}.{self.method.name}{arguments}"
+
+    def _real_type(self, type_: Type) -> Type:
+        vis = SubstituteTypeVariables({}, ChainMap(self._env(), self.self_type._env()))
+        return type_.accept(vis)
+
+    def parameter_types(self) -> list[Type]:
+        return [self._real_type(ty) for ty in self.method.parameter_types]
+
+    def return_type(self) -> Type:
+        return self._real_type(self.method.return_type)
+
+    def _env(self) -> dict[str, Type]:
+        return {
+            param.name: ty
+            for param, ty in zip(
+                self.method.type_parameters, self.arguments, strict=True
+            )
+        }
+
+    # FIXME: Return reason why if false
+    def implements(self, other: "MethodInstance") -> bool:
+        if len(self.method.type_parameters) != len(other.method.type_parameters):
+            return False
+        for self_param, other_param in zip(
+            self.method.type_parameters, other.method.type_parameters
+        ):
+            if not is_subtype(other_param.constraint, self_param.constraint):
+                return False
+        self_parameter_types = self.parameter_types()
+        other_parameter_types = other.parameter_types()
+        if len(self_parameter_types) != len(other_parameter_types):
+            return False
+        for self_param, other_param in zip(self_parameter_types, other_parameter_types):
+            if not is_subtype(other_param, self_param):
+                return False
+        return is_subtype(self.return_type(), other.return_type())
+
 
 class TypeVisitor(Generic[T]):
     def visit_instance(self, instance: Instance) -> T:
@@ -370,7 +450,7 @@ def _compile_members(
                     param.name.name,
                     _compile_type(param.constraint) if param.constraint else None,
                 )
-                for param in decl.type_parameters
+                for param in member.type_parameters
             ]
             param_types = [_compile_type(param.type) for param in member.parameters]
             methods.append(Method(name, type_parameters, return_type, param_types))
