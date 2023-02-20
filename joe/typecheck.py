@@ -143,10 +143,10 @@ class TypeInfo:
             param.update(visitor)
         for field in self.fields.values():
             field.update(visitor)
-        for method in self.methods.values():
-            method.update(visitor)
-        for method in self.static_methods.values():
-            method.update(visitor)
+        # for method in self.methods.values():
+        #     method.update(visitor)
+        # for method in self.static_methods.values():
+        #     method.update(visitor)
         self.implements = tuple(ty.accept(visitor) for ty in self.implements)
 
     def run_visitor(self, visitor: "TypeVisitor[None]") -> None:
@@ -261,9 +261,9 @@ class Instance(Type):
             bound_type_variables = bind_type_variables_from_arguments(
                 self, method, argument_types
             )
-            missing = set(bound_type_variables) - {
-                param.name for param in method.type_parameters
-            }
+            missing = {param.name for param in method.type_parameters} - set(
+                bound_type_variables
+            )
             if missing:
                 raise JoeTypeError(
                     f"Cannot infer type(s) of {','.join(missing)}, must be specified explicitly"  # noqa: E501

@@ -1,4 +1,5 @@
-from typing import cast
+from collections import ChainMap
+from itertools import chain
 
 from joe import ast
 from joe.parse import parse, scan
@@ -7,6 +8,7 @@ from joe.typecheck import (
     JoeTypeError,
     SubstituteTypeVariables,
     TopType,
+    Type,
     TypeInfo,
     TypeVariable,
     TypeVisitor,
@@ -36,6 +38,14 @@ class Abc<T: String> implements Xyz<T, Integer> {
 
     void method(Integer a) {
     }
+}
+"""
+
+text = """
+interface X<T> {}
+
+class A {
+    void method<T>(X<T> arg) {}
 }
 """
 
@@ -74,14 +84,18 @@ environment["Integer"] = TypeInfo("Integer", True, [], [], [], [], [])
 environment["String"] = TypeInfo("String", False, [], [], [], [], [])
 
 for decl in environment.values():
-    visitor = SubstituteTypeVariables(
-        environment,
-        {
-            p.name: TypeVariable(p.name, p.constraint or TopType())
-            for p in decl.type_parameters
-        },
-    )
+    class_env: dict[str, Type] = {
+        p.name: TypeVariable(p.name, p.constraint) for p in decl.type_parameters
+    }
+    visitor = SubstituteTypeVariables(environment, class_env)
     decl.update(visitor)
+
+    for method in chain(decl.methods.values(), decl.static_methods.values()):
+        method_env: dict[str, Type] = {
+            p.name: TypeVariable(p.name, p.constraint) for p in method.type_parameters
+        }
+        visitor = SubstituteTypeVariables(environment, ChainMap(method_env, class_env))
+        method.update(visitor)
 
     # print(repr(environment[name]))
     # from pprint import pprint
@@ -172,17 +186,24 @@ class CheckTypeParameterConstraints(TypeVisitor[None]):
 check_constraints = CheckTypeParameterConstraints()
 for decl in environment.values():
     decl.run_visitor(check_constraints)
+    for method in chain(decl.methods.values(), decl.static_methods.values()):
+        method.run_visitor(check_constraints)
 
 
-abc = Instance(environment["Abc"], [Instance(environment["String"], [])])
-zyx = Instance(environment["Zyx"], [Instance(environment["String"], [])])
+# abc = Instance(environment["Abc"], [Instance(environment["String"], [])])
+# zyx = Instance(environment["Zyx"], [Instance(environment["String"], [])])
 
-print("Abc < Xyz", is_subtype(abc, zyx))
+# print("Abc < Xyz", is_subtype(abc, zyx))
 
-somemeth_abc = abc.get_method("somemeth", [], [Instance(environment["Integer"], [])])
-somemeth_xyz = cast(Instance, next(iter(abc.supertypes()))).get_method(
-    "somemeth", [], [Instance(environment["Integer"], [])]
-)
+# somemeth_abc = abc.get_method("somemeth", [], [Instance(environment["Integer"], [])])
+# somemeth_xyz = cast(Instance, next(iter(abc.supertypes()))).get_method(
+#     "somemeth", [], [Instance(environment["Integer"], [])]
+# )
 
-print("Abc.somemeth < Xyz.somemeth", somemeth_abc.implements(somemeth_xyz))
-print(abc.get_method("somemeth", [], [Instance(environment["Integer"], [])]))
+# print("Abc.somemeth < Xyz.somemeth", somemeth_abc.implements(somemeth_xyz))
+# print(abc.get_method("somemeth", [], [Instance(environment["Integer"], [])]))
+
+a = Instance(environment["A"], [])
+arg = Instance(environment["X"], [Instance(environment["Integer"], [])])
+meth = a.get_method("method", [], [arg])
+print(meth)
