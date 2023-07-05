@@ -1,0 +1,12 @@
+class void {}
+class Integer {
+    void print() {}
+}
+class Double {}
+class Boolean {}
+
+class Array<T> {
+    Integer length;
+
+    T get(Integer index) {}
+}
