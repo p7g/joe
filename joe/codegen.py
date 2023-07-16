@@ -2,7 +2,7 @@ from collections import ChainMap
 from itertools import chain
 from typing import TypeAlias
 
-from llvmlite import ir
+from llvmlite import ir, binding as llvm_binding
 
 from joe import ast, eval, typed_ast
 
@@ -17,15 +17,19 @@ from joe import ast, eval, typed_ast
 
 
 def _method_to_llvm_type(
-    ir_module: ir.Module, this_type: ir.Type | None, bound_method: eval.BoundMethod
+    ir_module: ir.Module,
+    this_type: ir.Type | None,
+    bound_method: eval.BoundMethod | eval.BoundConstructor,
 ) -> ir.FunctionType:
     parameters: list[ir.Type] = [this_type] if this_type is not None else []
     for param in bound_method.get_parameter_types():
         parameters.append(_type_to_llvm(ir_module, param))
-    return ir.FunctionType(
-        _type_to_llvm(ir_module, bound_method.get_return_type()),
-        parameters,
+    return_type = (
+        ir.VoidType()
+        if isinstance(bound_method, eval.BoundConstructor)
+        else _type_to_llvm(ir_module, bound_method.get_return_type())
     )
+    return ir.FunctionType(return_type, parameters)
 
 
 def _type_to_llvm(ir_module: ir.Module, eval_type: eval.BoundType) -> ir.Type:
@@ -88,6 +92,9 @@ class CompileContext:
         "emitted_methods",
         "emitted_interface_impls",
         "ir_module",
+        "_malloc",
+        "_free",
+        "_target_data",
     )
 
     def __init__(self) -> None:
@@ -98,6 +105,28 @@ class CompileContext:
         # All code goes in one module for simplicity in accessing globals like
         # interface implementations
         self.ir_module = ir.Module()
+        self._malloc = self._free = self._target_data = None
+
+    def get_malloc(self) -> ir.Function:
+        if self._malloc is None:
+            malloc_type = ir.FunctionType(
+                ir.PointerType(ir.IntType(8)), [ir.IntType(64)]
+            )
+            self._malloc = ir.Function(self.ir_module, malloc_type, "malloc")
+        return self._malloc
+
+    def get_free(self) -> ir.Function:
+        if self._free is None:
+            free_type = ir.FunctionType(ir.VoidType(), [ir.PointerType(ir.IntType(8))])
+            self._free = ir.Function(self.ir_module, free_type, "free")
+        return self._free
+
+    def get_target_data(self) -> llvm_binding.TargetData:
+        if self._target_data is None:
+            self._target_data = llvm_binding.create_target_data(
+                self.ir_module.data_layout
+            )
+        return self._target_data
 
 
 # For each type encountered, emit the type declaration
@@ -138,8 +167,27 @@ class MethodCompiler(ast.AstVisitor):
             ctx.ir_module, self.llvm_function_type, method.name()
         )
         self.ir_builder = ir.IRBuilder(self.llvm_function.append_basic_block("entry"))
-        self.scope = ChainMap[str, ir.Value]()
-        self.variable_types = ChainMap[str, eval.BoundType]()
+        object_scope = {}
+        object_variable_types = {}
+        for field_ast in method.self_type.type_constructor.decl_ast.members:
+            if not isinstance(field_ast, ast.FieldDecl):
+                continue
+            object_variable_types[field_ast.name.name] = method.self_type.get_field(
+                field_ast.name.name
+            )
+            object_scope[field_ast.name.name] = self.ir_builder.gep(
+                self.llvm_function.args[0],  # this
+                [
+                    ir.Constant(ir.IntType(32), 0),
+                    ir.Constant(
+                        ir.IntType(32),
+                        method.self_type.get_field_index(field_ast.name.name),
+                    ),
+                ],
+                inbounds=True,
+            )
+        self.scope = ChainMap[str, ir.Value]({}, object_scope)
+        self.variable_types = ChainMap[str, eval.BoundType]({}, object_variable_types)
         for (param_name, param_type), ir_param in zip(
             chain(
                 (("this", method.self_type),),
@@ -160,6 +208,7 @@ class MethodCompiler(ast.AstVisitor):
             self.scope[param_name] = param_var
             self.variable_types[param_name] = param_type
         self._prev_expr = None
+        self._free = None
 
     def _compile_type(self, type_: ast.Type) -> ir.Type:
         self._prev_type = None
@@ -190,11 +239,27 @@ class MethodCompiler(ast.AstVisitor):
             else:
                 self.ir_builder.ret_void()
 
+    def visit_constructor_decl(self, constructor_decl: ast.ConstructorDecl) -> None:
+        super().visit_constructor_decl(constructor_decl)
+        if self.ir_builder.block and not self.ir_builder.block.is_terminated:
+            self.ir_builder.ret_void()
+
     def visit_return_statement(self, return_statement: ast.ReturnStatement) -> None:
         if return_statement.expr:
             self.ir_builder.ret(self._compile_expr(return_statement.expr))
         else:
             self.ir_builder.ret_void()
+
+    def visit_delete_statement(self, delete_expr: ast.DeleteStatement) -> None:
+        free = self.ctx.get_free()
+        self.ir_builder.call(
+            free,
+            [
+                self.ir_builder.bitcast(
+                    self._compile_expr(delete_expr.expr), ir.PointerType(ir.IntType(8))
+                )
+            ],
+        )
 
     def visit_expr_statement(self, expr_statement: ast.ExprStatement) -> None:
         self._compile_expr(expr_statement.expr)
@@ -269,7 +334,7 @@ class MethodCompiler(ast.AstVisitor):
         self.ir_builder.position_at_end(after_block)
         self.scope = self.scope.parents
 
-    def compile_variable_decl_statement(
+    def visit_variable_decl_statement(
         self, variable_decl_statement: ast.VariableDeclStatement
     ) -> None:
         assert variable_decl_statement.type or variable_decl_statement.expr
@@ -352,9 +417,161 @@ class ExpressionCompiler(typed_ast.TypedAstVisitor):
     def visit_this_expr(self, this_expr: typed_ast.ThisExpr) -> None:
         self._prev_expr = self.ir_builder.load(self.scope["this"])
 
+    def _struct_field_ptr(self, dot_expr: typed_ast.DotExpr) -> ir.Value:
+        struct_ptr = self._compile_expression(dot_expr.expr)
+        field_index = dot_expr.expr.type.get_field_index(dot_expr.name.name)
+        return self.ir_builder.gep(
+            struct_ptr,
+            [ir.Constant(ir.IntType(32), 0), ir.Constant(ir.IntType(32), field_index)],
+            inbounds=True,
+        )
+
+    def visit_binary_expr(self, binary_expr: typed_ast.BinaryExpr) -> None:
+        left = self._compile_expression(binary_expr.left)
+
+        if binary_expr.operator is ast.BinaryOperator.AND:
+            prev_block = self.ir_builder.block
+            left_is_false = self.ir_builder.icmp_signed(
+                "==",
+                left,
+                ir.Constant(
+                    _type_to_llvm(
+                        self.method_compiler.ctx.ir_module, binary_expr.left.type
+                    ),
+                    0,
+                ),
+            )
+            else_block = self.ir_builder.append_basic_block()
+            after_block = self.ir_builder.append_basic_block()
+            self.ir_builder.cbranch(left_is_false, else_block, after_block)
+
+            self.ir_builder.position_at_end(else_block)
+            right = self._compile_expression(binary_expr.right)
+            right_is_false = self.ir_builder.icmp_signed(
+                "==",
+                right,
+                ir.Constant(
+                    _type_to_llvm(
+                        self.method_compiler.ctx.ir_module, binary_expr.right.type
+                    ),
+                    0,
+                ),
+            )
+            self.ir_builder.branch(after_block)
+
+            self.ir_builder.position_at_end(after_block)
+            result_is_false = self.ir_builder.phi(
+                _type_to_llvm(self.method_compiler.ctx.ir_module, binary_expr.type)
+            )
+            result_is_false.add_incoming(left_is_false, prev_block)
+            result_is_false.add_incoming(right_is_false, else_block)
+            self._prev_expr = self.ir_builder.not_(result_is_false)
+            return
+        elif binary_expr.operator is ast.BinaryOperator.OR:
+            prev_block = self.ir_builder.block
+            left_is_false = self.ir_builder.icmp_signed(
+                "==",
+                left,
+                ir.Constant(
+                    _type_to_llvm(
+                        self.method_compiler.ctx.ir_module, binary_expr.left.type
+                    ),
+                    0,
+                ),
+            )
+            else_block = self.ir_builder.append_basic_block()
+            after_block = self.ir_builder.append_basic_block()
+            self.ir_builder.cbranch(left_is_false, else_block, after_block)
+            self.ir_builder.position_at_end(else_block)
+            right = self._compile_expression(binary_expr.right)
+            right_is_false = self.ir_builder.icmp_signed(
+                "==",
+                right,
+                ir.Constant(
+                    _type_to_llvm(
+                        self.method_compiler.ctx.ir_module, binary_expr.right.type
+                    ),
+                    0,
+                ),
+            )
+            self.ir_builder.branch(after_block)
+            self.ir_builder.position_at_end(after_block)
+            result_is_false = self.ir_builder.phi(
+                _type_to_llvm(self.method_compiler.ctx.ir_module, binary_expr.type)
+            )
+            result_is_false.add_incoming(left_is_false, prev_block)
+            result_is_false.add_incoming(right_is_false, else_block)
+            self._prev_expr = self.ir_builder.not_(result_is_false)
+            return
+        elif binary_expr.operator is ast.BinaryOperator.ASSIGN:
+            if isinstance(binary_expr.left, typed_ast.IdentifierExpr):
+                new_value = self._compile_expression(binary_expr.right)
+                self.ir_builder.store(new_value, self.scope[binary_expr.left.name.name])
+                self._prev_expr = new_value
+            elif isinstance(binary_expr.left, typed_ast.DotExpr):
+                new_value = self._compile_expression(binary_expr.right)
+                field_ptr = self._struct_field_ptr(binary_expr.left)
+                self.ir_builder.store(new_value, field_ptr)
+                self._prev_expr = new_value
+            else:
+                raise NotImplementedError(binary_expr.left)
+            return
+
+        binary_expr.right.accept(self)
+        right = self._prev_expr
+        if binary_expr.operator is ast.BinaryOperator.PLUS:
+            self._prev_expr = self.ir_builder.add(left, right)
+        elif binary_expr.operator is ast.BinaryOperator.MINUS:
+            self._prev_expr = self.ir_builder.sub(left, right)
+        elif binary_expr.operator is ast.BinaryOperator.TIMES:
+            self._prev_expr = self.ir_builder.mul(left, right)
+        elif binary_expr.operator is ast.BinaryOperator.DIVIDE:
+            self._prev_expr = self.ir_builder.sdiv(left, right)
+        elif binary_expr.operator is ast.BinaryOperator.MODULO:
+            self._prev_expr = self.ir_builder.srem(left, right)
+        elif binary_expr.operator is ast.BinaryOperator.EQUALS:
+            self._prev_expr = self.ir_builder.icmp_signed("==", left, right)
+        elif binary_expr.operator is ast.BinaryOperator.NOT_EQUALS:
+            self._prev_expr = self.ir_builder.icmp_signed("!=", left, right)
+        elif binary_expr.operator is ast.BinaryOperator.LESS_THAN:
+            self._prev_expr = self.ir_builder.icmp_signed("<", left, right)
+        elif binary_expr.operator is ast.BinaryOperator.LESS_THAN_OR_EQUAL:
+            self._prev_expr = self.ir_builder.icmp_signed("<=", left, right)
+        elif binary_expr.operator is ast.BinaryOperator.GREATER_THAN:
+            self._prev_expr = self.ir_builder.icmp_signed(">", left, right)
+        elif binary_expr.operator is ast.BinaryOperator.GREATER_THAN_OR_EQUAL:
+            self._prev_expr = self.ir_builder.icmp_signed(">=", left, right)
+        else:
+            raise NotImplementedError(binary_expr.operator)
+
+    def visit_unary_expr(self, unary_expr: typed_ast.UnaryExpr) -> None:
+        value = self._compile_expression(unary_expr.expr)
+        if unary_expr.operator is ast.UnaryOperator.NOT:
+            self._prev_expr = self.ir_builder.not_(value)
+        elif unary_expr.operator is ast.UnaryOperator.MINUS:
+            self._prev_expr = self.ir_builder.neg(value)
+        else:
+            raise NotImplementedError(unary_expr.operator)
+
+    def visit_new_expr(self, new_expr: typed_ast.NewExpr) -> None:
+        # FIXME: if there's an error make sure to free the memory
+        malloc = self.method_compiler.ctx.get_malloc()
+        obj_ptr_ty = _type_to_llvm(self.method_compiler.ctx.ir_module, new_expr.type)
+        assert isinstance(obj_ptr_ty, ir.PointerType)
+        obj_ty = obj_ptr_ty.pointee
+        size = obj_ty.get_abi_size(self.method_compiler.ctx.get_target_data())
+        mem = self.ir_builder.call(malloc, [ir.Constant(ir.IntType(64), size)])
+        mem = self.ir_builder.bitcast(mem, obj_ptr_ty)
+
+        constructor = new_expr.type.get_constructor()
+        if constructor:
+            function = self._get_compiled_method(constructor)
+            args = [mem, *map(self._compile_expression, new_expr.arguments)]
+            self.ir_builder.call(function, args)
+
+        self._prev_expr = mem
+
     def visit_dot_expr(self, dot_expr: typed_ast.DotExpr) -> None:
-        obj = dot_expr.expr.accept(self)
-        type_ = dot_expr.type
         # TODO: evaluate_expr, basically annotate the AST nodes with their
         # types, and maybe we can even resolve where names come from ahead of
         # time. that way the backend doesn't need to all implement the business
@@ -365,18 +582,20 @@ class ExpressionCompiler(typed_ast.TypedAstVisitor):
         #
         # This is needed so we can figure out how to even access attributes of
         # the object.
+        self._prev_expr = self.ir_builder.load(self._struct_field_ptr(dot_expr))
 
-        field_index = type_.get_field_index(dot_expr.name.name)
-        self._prev_expr = self.ir_builder.load(
-            self.ir_builder.gep(
-                obj,
-                [
-                    ir.Constant(ir.IntType(32), 0),
-                    ir.Constant(ir.IntType(32), field_index),
-                ],
-                inbounds=True,
+    def _get_compiled_method(self, method: eval.BoundMethod) -> ir.Function:
+        try:
+            function = self.method_compiler.ctx.ir_module.get_global(method.name())
+        except KeyError:
+            # Look up class type, get method, compile it
+            method_compiler = MethodCompiler(self.method_compiler.ctx, method)
+            method.decl_ast.accept(method_compiler)
+            function = method_compiler.llvm_function
+            assert function is self.method_compiler.ctx.ir_module.get_global(
+                method.name()
             )
-        )
+        return function
 
     def visit_call_expr(self, call_expr: typed_ast.CallExpr) -> None:
         def cstr(bytes_: bytes) -> ir.Value:
@@ -397,22 +616,9 @@ class ExpressionCompiler(typed_ast.TypedAstVisitor):
             )
             args = [cstr(b"%s: %d\n\0"), cstr(b"hello\0")]
         else:
-            try:
-                function = self.method_compiler.ctx.ir_module.get_global(
-                    call_expr.method.name()
-                )
-            except KeyError:
-                # Look up class type, get method, compile it
-                method_compiler = MethodCompiler(
-                    self.method_compiler.ctx, call_expr.method
-                )
-                call_expr.method.decl_ast.accept(method_compiler)
-                function = method_compiler.llvm_function
-                assert function is self.method_compiler.ctx.ir_module.get_global(
-                    call_expr.method.name()
-                )
-
+            function = self._get_compiled_method(call_expr.method)
             args = []
+
         args.append(self._compile_expression(call_expr.expr))
         for arg in call_expr.arguments:
             args.append(self._compile_expression(arg))

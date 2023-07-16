@@ -99,14 +99,16 @@ class BoundType:
         assert isinstance(method, ast.MethodDecl)
         return BoundMethod(self, method, type_arguments)
 
-    def get_constructor(self) -> "BoundConstructor":
+    def get_constructor(self) -> "BoundConstructor | None":
         assert isinstance(self.decl_ast, ast.ClassDecl)
         constructor = next(
-            member
+            (member
             for member in self.decl_ast.members
-            if isinstance(member, ast.ConstructorDecl)
+            if isinstance(member, ast.ConstructorDecl)), None
         )
-        return BoundConstructor(self, constructor)
+        if constructor:
+            return BoundConstructor(self, constructor)
+        return None
 
 
 class BoundMethod:
