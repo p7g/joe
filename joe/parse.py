@@ -97,6 +97,7 @@ class TokenType(Enum):
     RIGHT_PAREN = auto()
     SEMICOLON = auto()
     SLASH = auto()
+    STATIC = auto()
     STRING = auto()
     THIS = auto()
     TRUE = auto()
@@ -176,6 +177,7 @@ _keywords: Final = {
     "interface": TokenType.INTERFACE,
     "new": TokenType.NEW,
     "return": TokenType.RETURN,
+    "static": TokenType.STATIC,
     "this": TokenType.THIS,
     "true": TokenType.TRUE,
     "var": TokenType.VAR,
@@ -449,6 +451,7 @@ def _parse_class_member(tokens: _Tokens) -> ClassMember:
 def _parse_member(
     tokens: _Tokens,
 ) -> MethodSig | MethodDecl | ConstructorDecl | FieldDecl:
+    static = bool(tokens.match(TokenType.STATIC))
     type_ = _parse_type(tokens)
     if tokens.match(TokenType.LEFT_PAREN, consume=False):
         if type_.type_arguments:
@@ -474,13 +477,17 @@ def _parse_member(
         if tokens.match(TokenType.SEMICOLON):
             if is_constructor:
                 raise JoeParseError(f"Constructor must have a body at {name.location}")
+            elif static:
+                raise JoeParseError(
+                    f"Interface method cannot be static at {name.location}"
+                )
             return MethodSig(type_.location, type_, name, type_param_list, params)
         body = _parse_method_body(tokens)
         if is_constructor:
             return ConstructorDecl(name.location, name, params, body)
         else:
             return MethodDecl(
-                type_.location, type_, name, type_param_list, params, body
+                type_.location, type_, name, type_param_list, params, body, static
             )
     else:
         tokens.expect(TokenType.SEMICOLON)
@@ -820,7 +827,7 @@ def _parse_index_expression(tokens: _Tokens, lhs: Expr) -> Expr:
 def _parse_call_expression(tokens: _Tokens, callee: Expr) -> Expr:
     if isinstance(callee, IdentifierExpr):
         name = callee.name
-        receiver = ThisExpr(callee.location)
+        receiver = None
     elif isinstance(callee, DotExpr):
         name = callee.name
         receiver = callee.expr

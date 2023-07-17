@@ -44,6 +44,19 @@ class BoundTypeConstructor:
     def name(self) -> str:
         return f"{self.module.name()}.{self.decl_ast.name.name}"
 
+    def get_method(
+        self, name: str, type_arguments: Iterable["BoundType"]
+    ) -> "BoundMethod":
+        """Can only find static methods"""
+        method = next(
+            member
+            for member in self.decl_ast.members
+            if isinstance(member, ast.MethodDecl)
+            and member.name.name == name
+            and member.static
+        )
+        return BoundMethod(self, method, type_arguments, method.static)
+
 
 class BoundType:
     def __init__(
@@ -94,17 +107,23 @@ class BoundType:
         self, name: str, type_arguments: Iterable["BoundType"]
     ) -> "BoundMethod":
         method = next(
-            member for member in self.decl_ast.members if member.name.name == name
+            member
+            for member in self.decl_ast.members
+            if isinstance(member, ast.MethodDecl)
+            and member.name.name == name
+            and not member.static
         )
-        assert isinstance(method, ast.MethodDecl)
-        return BoundMethod(self, method, type_arguments)
+        return BoundMethod(self, method, type_arguments, method.static)
 
     def get_constructor(self) -> "BoundConstructor | None":
         assert isinstance(self.decl_ast, ast.ClassDecl)
         constructor = next(
-            (member
-            for member in self.decl_ast.members
-            if isinstance(member, ast.ConstructorDecl)), None
+            (
+                member
+                for member in self.decl_ast.members
+                if isinstance(member, ast.ConstructorDecl)
+            ),
+            None,
         )
         if constructor:
             return BoundConstructor(self, constructor)
@@ -114,9 +133,10 @@ class BoundType:
 class BoundMethod:
     def __init__(
         self,
-        bound_type: BoundType,
+        bound_type: BoundType | BoundTypeConstructor,
         decl_ast: ast.MethodDecl,
         arguments: Iterable["BoundType"],
+        static: bool,
     ):
         self.self_type = bound_type
         self.environment = bound_type.environment.new_child()
@@ -127,6 +147,7 @@ class BoundMethod:
                 self.environment, param.type
             )
         self.decl_ast = decl_ast
+        self.static = static
 
     def name(self) -> str:
         arg_names = ",".join(
@@ -158,6 +179,7 @@ class BoundConstructor:
                 bound_type.environment, param.type
             )
         self.decl_ast = decl_ast
+        self.static = False
 
     def name(self) -> str:
         return f"{self.self_type.name()}.{self.decl_ast.name.name}"
@@ -298,15 +320,35 @@ def evaluate_expr(
         field_type = obj_expr.type.get_field(expr_ast.name.name)
         return typed_ast.DotExpr(field_type, expr_ast, obj_expr, expr_ast.name)
     elif isinstance(expr_ast, ast.CallExpr):
-        receiver = evaluate_expr(env, scope, expr_ast.expr)
-        method = receiver.type.get_method(
+        # NOTE: receiver could actually be an identifier referring to a type,
+        # not an object
+        # FIXME: when referring to static methods, it should not be possible to
+        # pass type arguments to the class.
+        if isinstance(expr_ast.expr, ast.IdentifierExpr):
+            if expr_ast.expr.name.name in scope:
+                receiver_type = evaluate_expr(env, scope, expr_ast.expr).type
+            else:
+                receiver_type = env.get_type_constructor(expr_ast.expr.name.name)
+        elif expr_ast.expr is None:
+            this_type = scope["this"]
+            try:
+                this_type.get_method(expr_ast.name.name, [])
+                receiver_type = this_type
+            except StopIteration:
+                receiver_type = this_type.type_constructor
+        else:
+            receiver_type = evaluate_expr(env, scope, expr_ast.expr).type
+        method = receiver_type.get_method(
             expr_ast.name.name,
             [evaluate_type(env, arg) for arg in expr_ast.type_arguments],
         )
-        args = [evaluate_expr(env, scope, arg) for arg in expr_ast.arguments]
-        return typed_ast.CallExpr(
-            method, expr_ast, receiver, expr_ast.name, args
+        receiver = (
+            evaluate_expr(env, scope, expr_ast.expr)
+            if expr_ast.expr and not method.static
+            else None
         )
+        args = [evaluate_expr(env, scope, arg) for arg in expr_ast.arguments]
+        return typed_ast.CallExpr(method, expr_ast, receiver, expr_ast.name, args)
     elif isinstance(expr_ast, ast.NewExpr):
         ty = evaluate_type(env, expr_ast.type)
         return typed_ast.NewExpr(

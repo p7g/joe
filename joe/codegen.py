@@ -20,8 +20,11 @@ def _method_to_llvm_type(
     ir_module: ir.Module,
     this_type: ir.Type | None,
     bound_method: eval.BoundMethod | eval.BoundConstructor,
+    static: bool,
 ) -> ir.FunctionType:
-    parameters: list[ir.Type] = [this_type] if this_type is not None else []
+    parameters: list[ir.Type] = (
+        [this_type] if this_type is not None and not static else []
+    )
     for param in bound_method.get_parameter_types():
         parameters.append(_type_to_llvm(ir_module, param))
     return_type = (
@@ -60,7 +63,10 @@ def _type_to_llvm(ir_module: ir.Module, eval_type: eval.BoundType) -> ir.Type:
                 assert not method.type_parameters
                 bound_method = eval_type.get_method(method.name.name, [])
                 method_type = _method_to_llvm_type(
-                    ir_module, ir.PointerType(ir.IntType(8)), bound_method
+                    ir_module,
+                    ir.PointerType(ir.IntType(8)),
+                    bound_method,
+                    bound_method.static,
                 )
                 vtable_fields.append(ir.PointerType(method_type))
         vtable_type = ir_module.context.get_identified_type(
@@ -159,9 +165,13 @@ class MethodCompiler(ast.AstVisitor):
     def __init__(self, ctx: CompileContext, method: eval.BoundMethod) -> None:
         self.ctx = ctx
         self.method = method
-        self.this_type = _type_to_llvm(ctx.ir_module, method.self_type)
+        self.this_type = (
+            None
+            if method.static or isinstance(method.self_type, eval.BoundTypeConstructor)
+            else _type_to_llvm(ctx.ir_module, method.self_type)
+        )
         self.llvm_function_type = _method_to_llvm_type(
-            ctx.ir_module, self.this_type, method
+            ctx.ir_module, self.this_type, method, method.static
         )
         self.llvm_function = ir.Function(
             ctx.ir_module, self.llvm_function_type, method.name()
@@ -169,28 +179,30 @@ class MethodCompiler(ast.AstVisitor):
         self.ir_builder = ir.IRBuilder(self.llvm_function.append_basic_block("entry"))
         object_scope = {}
         object_variable_types = {}
-        for field_ast in method.self_type.type_constructor.decl_ast.members:
-            if not isinstance(field_ast, ast.FieldDecl):
-                continue
-            object_variable_types[field_ast.name.name] = method.self_type.get_field(
-                field_ast.name.name
-            )
-            object_scope[field_ast.name.name] = self.ir_builder.gep(
-                self.llvm_function.args[0],  # this
-                [
-                    ir.Constant(ir.IntType(32), 0),
-                    ir.Constant(
-                        ir.IntType(32),
-                        method.self_type.get_field_index(field_ast.name.name),
-                    ),
-                ],
-                inbounds=True,
-            )
+        if not method.static:
+            assert isinstance(method.self_type, eval.BoundType)
+            for field_ast in method.self_type.type_constructor.decl_ast.members:
+                if not isinstance(field_ast, ast.FieldDecl):
+                    continue
+                object_variable_types[field_ast.name.name] = method.self_type.get_field(
+                    field_ast.name.name
+                )
+                object_scope[field_ast.name.name] = self.ir_builder.gep(
+                    self.llvm_function.args[0],  # this
+                    [
+                        ir.Constant(ir.IntType(32), 0),
+                        ir.Constant(
+                            ir.IntType(32),
+                            method.self_type.get_field_index(field_ast.name.name),
+                        ),
+                    ],
+                    inbounds=True,
+                )
         self.scope = ChainMap[str, ir.Value]({}, object_scope)
         self.variable_types = ChainMap[str, eval.BoundType]({}, object_variable_types)
         for (param_name, param_type), ir_param in zip(
             chain(
-                (("this", method.self_type),),
+                () if method.static else (("this", method.self_type),),
                 (
                     (
                         param.name.name,
@@ -414,8 +426,11 @@ class ExpressionCompiler(typed_ast.TypedAstVisitor):
     def visit_identifier_expr(self, identifier_expr: typed_ast.IdentifierExpr) -> None:
         self._prev_expr = self.ir_builder.load(self.scope[identifier_expr.name.name])
 
+    def _get_this(self) -> ir.Value:
+        return self.ir_builder.load(self.scope["this"])
+
     def visit_this_expr(self, this_expr: typed_ast.ThisExpr) -> None:
-        self._prev_expr = self.ir_builder.load(self.scope["this"])
+        self._prev_expr = self._get_this()
 
     def _struct_field_ptr(self, dot_expr: typed_ast.DotExpr) -> ir.Value:
         struct_ptr = self._compile_expression(dot_expr.expr)
@@ -619,7 +634,11 @@ class ExpressionCompiler(typed_ast.TypedAstVisitor):
             function = self._get_compiled_method(call_expr.method)
             args = []
 
-        args.append(self._compile_expression(call_expr.expr))
+        if not call_expr.method.static:
+            if call_expr.expr:
+                args.append(self._compile_expression(call_expr.expr))
+            else:
+                args.append(self._get_this())
         for arg in call_expr.arguments:
             args.append(self._compile_expression(arg))
 

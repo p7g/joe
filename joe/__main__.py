@@ -59,6 +59,7 @@ engine.finalize_object()
 engine.run_static_constructors()
 
 from ctypes import CFUNCTYPE
+
 func_ptr = engine.get_function_address(meth.name())
 cfunc = CFUNCTYPE(None)(func_ptr)
 cfunc()

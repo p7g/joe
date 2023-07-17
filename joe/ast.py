@@ -123,7 +123,8 @@ class AstVisitor:
         self.visit_identifier(dot_expr.name)
 
     def visit_call_expr(self, call_expr: "CallExpr") -> None:
-        self.visit_expression(call_expr.expr)
+        if call_expr.expr:
+            self.visit_expression(call_expr.expr)
         self.visit_identifier(call_expr.name)
         for type_argument in call_expr.type_arguments:
             self.visit_type(type_argument)
@@ -327,7 +328,14 @@ class ConstructorDecl(Node):
 
 
 class MethodDecl(Node):
-    __slots__ = ("return_type", "name", "type_parameters", "parameters", "body")
+    __slots__ = (
+        "return_type",
+        "name",
+        "type_parameters",
+        "parameters",
+        "body",
+        "static",
+    )
 
     def __init__(
         self,
@@ -337,6 +345,7 @@ class MethodDecl(Node):
         type_parameters: Iterable[TypeParameter],
         parameters: Iterable[Parameter],
         body: Iterable[Statement],
+        static: bool,
     ) -> None:
         super().__init__(location)
         self.return_type = return_type
@@ -344,6 +353,7 @@ class MethodDecl(Node):
         self.type_parameters = tuple(type_parameters)
         self.parameters = tuple(parameters)
         self.body = tuple(body)
+        self.static = static
 
     def accept(self, visitor: AstVisitor) -> None:
         visitor.visit_method_decl(self)
@@ -509,7 +519,7 @@ class CallExpr(Node):
     def __init__(
         self,
         location: Location,
-        expr: Expr,
+        expr: Expr | None,
         name: Identifier,
         type_arguments: Iterable[Type],
         arguments: Iterable[Expr],

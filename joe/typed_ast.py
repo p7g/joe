@@ -179,7 +179,7 @@ class CallExpr(Node):
         self,
         method: "BoundMethod",
         original_node: ast.Node,
-        expr: Expr,
+        expr: Expr | None,
         name: ast.Identifier,
         arguments: Iterable[Expr],
     ) -> None:
