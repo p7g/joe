@@ -45,6 +45,8 @@ def _type_to_llvm(ir_module: ir.Module, eval_type: eval.BoundType) -> ir.Type:
         return ir.DoubleType()
     elif name == "joe.prelude.Boolean":
         return ir.IntType(1)
+    elif name == "joe.prelude.String":
+        return ir.PointerType(ir.IntType(8))
 
     # FIXME: Abstract over type representation
     # FIXME: this should return the representation of an instance of the type
@@ -412,9 +414,17 @@ class ExpressionCompiler(typed_ast.TypedAstVisitor):
         # Also maybe literal strings should actually call some prelude method,
         # like String.fromBytes(), which could instantiate different string
         # variants depending on the length
-        self._prev_expr = ir.Constant(
-            ir.ArrayType(ir.IntType(8), len(literal_string.value) + 1),
-            bytearray(literal_string.value, "utf8") + b"\0",
+        str_const_type = ir.ArrayType(ir.IntType(8), len(literal_string.value) + 1)
+        str_var = self.ir_builder.alloca(str_const_type)
+        self.ir_builder.store(
+            ir.Constant(
+                str_const_type, bytearray(literal_string.value, "utf8") + b"\0"
+            ),
+            str_var,
+        )
+        self._prev_expr = self.ir_builder.bitcast(
+            str_var,
+            _type_to_llvm(self.method_compiler.ctx.ir_module, literal_string.type),
         )
 
     def visit_literal_bool(self, literal_bool: typed_ast.LiteralBool) -> None:

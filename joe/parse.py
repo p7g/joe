@@ -256,6 +256,29 @@ def scan(filename: str, chars: Iterable[str]) -> Iterator[Token]:
                     break
                 s += next(chars)
             yield Token(TokenType.INT, location, s)
+        elif c == '"':
+            s = ""
+            while True:
+                c2 = next(chars)
+                if c2 == '"':
+                    break
+                elif c2 == "\\":
+                    c2 = next(chars)
+                    if c2 == "n":
+                        s += "\n"
+                    elif c2 == "t":
+                        s += "\t"
+                    elif c2 == '"':
+                        s += '"'
+                    elif c2 == "\\":
+                        s += "\\"
+                    else:
+                        raise JoeParseError(
+                            f"Unexpected escape sequence {c2!r} at {location}"
+                        )
+                else:
+                    s += c2
+            yield Token(TokenType.STRING, location, s)
         else:
             raise JoeParseError(f"Unexpected token {c!r} at {location}")
 
