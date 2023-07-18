@@ -546,7 +546,6 @@ def _parse_block_or_statement(tokens: _Tokens) -> list[Statement]:
     statements = []
     while not tokens.match(TokenType.RIGHT_BRACE):
         statements.append(_parse_statement(tokens))
-    tokens.expect(TokenType.RIGHT_BRACE)
     return statements
 
 

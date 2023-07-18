@@ -39,14 +39,21 @@ def _type_to_llvm(ir_module: ir.Module, eval_type: eval.BoundType) -> ir.Type:
     name = eval_type.type_constructor.name()
     if name == "joe.prelude.void":
         return ir.VoidType()
-    elif name == "joe.prelude.Integer":
+    elif name == "joe.prelude.Byte":
+        return ir.IntType(8)
+    elif name in ("joe.prelude.Integer", "joe.prelude.Unsigned"):
         return ir.IntType(32)
+    elif name in ("joe.prelude.Long", "joe.prelude.UnsignedLong"):
+        return ir.IntType(64)
     elif name == "joe.prelude.Double":
         return ir.DoubleType()
     elif name == "joe.prelude.Boolean":
         return ir.IntType(1)
     elif name == "joe.prelude.String":
         return ir.PointerType(ir.IntType(8))
+    elif name == "joe.prelude.Pointer":
+        elem_type = eval_type.environment.get_type("T")
+        return ir.PointerType(_type_to_llvm(ir_module, elem_type))
 
     # FIXME: Abstract over type representation
     # FIXME: this should return the representation of an instance of the type
@@ -96,9 +103,6 @@ def _type_to_llvm(ir_module: ir.Module, eval_type: eval.BoundType) -> ir.Type:
 
 class CompileContext:
     __slots__ = (
-        "emitted_types",
-        "emitted_methods",
-        "emitted_interface_impls",
         "ir_module",
         "_malloc",
         "_free",
@@ -106,10 +110,6 @@ class CompileContext:
     )
 
     def __init__(self) -> None:
-        # This is keyed by BoundMethod.name()
-        self.emitted_methods: dict[str, ir.FunctionType] = {}
-        # Globals holding the implementation of an interface
-        self.emitted_interface_impls: dict[tuple[str, str], ir.GlobalValue] = {}
         # All code goes in one module for simplicity in accessing globals like
         # interface implementations
         self.ir_module = ir.Module()
@@ -245,7 +245,9 @@ class MethodCompiler(ast.AstVisitor):
 
     def visit_method_decl(self, method_decl: ast.MethodDecl) -> None:
         super().visit_method_decl(method_decl)
-        if self.ir_builder.block and not self.ir_builder.block.is_terminated:
+        last_block = self.llvm_function.basic_blocks[-1]
+        if not last_block.is_terminated:
+            self.ir_builder.position_at_end(last_block)
             if method_decl.return_type.name.name != "void":
                 self.ir_builder.ret(
                     ir.Constant(self.llvm_function_type.return_type, None)
@@ -290,12 +292,16 @@ class MethodCompiler(ast.AstVisitor):
         self.ir_builder.position_at_end(then_block)
         for statement in if_statement.then:
             statement.accept(self)
-        self.ir_builder.branch(after_block)
+
+        # i.e. if there is a return
+        if not then_block.is_terminated:
+            self.ir_builder.branch(after_block)
 
         self.ir_builder.position_at_end(else_block)
         for statement in if_statement.else_:
             statement.accept(self)
-        self.ir_builder.branch(after_block)
+        if not else_block.is_terminated:
+            self.ir_builder.branch(after_block)
 
         self.ir_builder.position_at_end(after_block)
 
@@ -313,7 +319,8 @@ class MethodCompiler(ast.AstVisitor):
         self.ir_builder.position_at_end(body_block)
         for statement in while_statement.body:
             statement.accept(self)
-        self.ir_builder.branch(condition_block)
+        if not body_block.is_terminated:
+            self.ir_builder.branch(condition_block)
 
         self.ir_builder.position_at_end(after_block)
 
@@ -339,7 +346,8 @@ class MethodCompiler(ast.AstVisitor):
         for statement in for_statement.body:
             statement.accept(self)
 
-        self.ir_builder.branch(update_block)
+        if not update_block.is_terminated:
+            self.ir_builder.branch(update_block)
         self.ir_builder.position_at_end(update_block)
         if for_statement.update:
             self._compile_expr(for_statement.update)
@@ -360,7 +368,7 @@ class MethodCompiler(ast.AstVisitor):
             type_ = eval.evaluate_type(
                 self.method.environment, variable_decl_statement.type
             )
-            expr = ir.Constant(type_, ir.Undefined)
+            expr = ir.Constant(_type_to_llvm(self.ctx.ir_module, type_), ir.Undefined)
         location = self.ir_builder.alloca(_type_to_llvm(self.ctx.ir_module, type_))
         self.ir_builder.store(expr, location)
         self.scope[variable_decl_statement.name.name] = location
@@ -441,6 +449,26 @@ class ExpressionCompiler(typed_ast.TypedAstVisitor):
 
     def visit_this_expr(self, this_expr: typed_ast.ThisExpr) -> None:
         self._prev_expr = self._get_this()
+
+    def visit_integer_cast_expr(
+        self, integer_cast_expr: typed_ast.IntegerCastExpr
+    ) -> None:
+        desired_type = _type_to_llvm(
+            self.method_compiler.ctx.ir_module, integer_cast_expr.type
+        )
+        actual_type = _type_to_llvm(
+            self.method_compiler.ctx.ir_module, integer_cast_expr.expr.type
+        )
+        assert isinstance(desired_type, ir.IntType) and isinstance(
+            actual_type, ir.IntType
+        )
+
+        int_expr = self._compile_expression(integer_cast_expr.expr)
+        if actual_type.width > desired_type.width:
+            int_expr = self.ir_builder.trunc(int_expr, desired_type)
+        elif actual_type.width < desired_type.width:
+            int_expr = self.ir_builder.sext(int_expr, desired_type)
+        self._prev_expr = int_expr
 
     def _struct_field_ptr(self, dot_expr: typed_ast.DotExpr) -> ir.Value:
         struct_ptr = self._compile_expression(dot_expr.expr)
@@ -529,21 +557,40 @@ class ExpressionCompiler(typed_ast.TypedAstVisitor):
             self._prev_expr = self.ir_builder.not_(result_is_false)
             return
         elif binary_expr.operator is ast.BinaryOperator.ASSIGN:
+            new_value = self._compile_expression(binary_expr.right)
+            self._prev_expr = new_value
             if isinstance(binary_expr.left, typed_ast.IdentifierExpr):
-                new_value = self._compile_expression(binary_expr.right)
                 self.ir_builder.store(new_value, self.scope[binary_expr.left.name.name])
-                self._prev_expr = new_value
             elif isinstance(binary_expr.left, typed_ast.DotExpr):
-                new_value = self._compile_expression(binary_expr.right)
                 field_ptr = self._struct_field_ptr(binary_expr.left)
                 self.ir_builder.store(new_value, field_ptr)
-                self._prev_expr = new_value
+            elif isinstance(binary_expr.left, typed_ast.IndexExpr):
+                array_ptr = self._compile_expression(binary_expr.left.expr)
+                index = self._compile_expression(binary_expr.left.index)
+                array_buf = self.ir_builder.load(
+                    self.ir_builder.gep(
+                        array_ptr,
+                        [
+                            ir.Constant(ir.IntType(32), 0),
+                            ir.Constant(
+                                ir.IntType(32),
+                                binary_expr.left.expr.type.get_field_index("_elements"),
+                            ),
+                        ],
+                    )
+                )
+                self.ir_builder.store(
+                    new_value,
+                    self.ir_builder.gep(
+                        array_buf,
+                        [self.ir_builder.sext(index, ir.IntType(64))],
+                    ),
+                )
             else:
                 raise NotImplementedError(binary_expr.left)
             return
 
-        binary_expr.right.accept(self)
-        right = self._prev_expr
+        right = self._compile_expression(binary_expr.right)
         if binary_expr.operator is ast.BinaryOperator.PLUS:
             self._prev_expr = self.ir_builder.add(left, right)
         elif binary_expr.operator is ast.BinaryOperator.MINUS:
@@ -578,6 +625,30 @@ class ExpressionCompiler(typed_ast.TypedAstVisitor):
         else:
             raise NotImplementedError(unary_expr.operator)
 
+    def visit_index_expr(self, index_expr: typed_ast.IndexExpr) -> None:
+        array_ptr = self._compile_expression(index_expr.expr)
+        index = self._compile_expression(index_expr.index)
+        array_buf = self.ir_builder.load(
+            self.ir_builder.gep(
+                array_ptr,
+                [
+                    ir.Constant(ir.IntType(32), 0),
+                    ir.Constant(
+                        ir.IntType(32),
+                        index_expr.expr.type.get_field_index("_elements"),
+                    ),
+                ],
+            )
+        )
+        self._prev_expr = self.ir_builder.load(
+            self.ir_builder.gep(
+                array_buf,
+                [
+                    self.ir_builder.sext(index, ir.IntType(64)),
+                ],
+            ),
+        )
+
     def visit_new_expr(self, new_expr: typed_ast.NewExpr) -> None:
         # FIXME: if there's an error make sure to free the memory
         malloc = self.method_compiler.ctx.get_malloc()
@@ -595,6 +666,65 @@ class ExpressionCompiler(typed_ast.TypedAstVisitor):
             self.ir_builder.call(function, args)
 
         self._prev_expr = mem
+
+    def visit_new_array_expr(self, new_array_expr: typed_ast.NewArrayExpr) -> None:
+        malloc = self.method_compiler.ctx.get_malloc()
+        element_ty = new_array_expr.type.environment.get_type("T")
+        element_llvm_ty = _type_to_llvm(self.method_compiler.ctx.ir_module, element_ty)
+        length = self.ir_builder.sext(
+            self._compile_expression(new_array_expr.size), ir.IntType(64)
+        )
+        size = self.ir_builder.mul(
+            length,
+            ir.Constant(
+                ir.IntType(64),
+                element_llvm_ty.get_abi_size(
+                    self.method_compiler.ctx.get_target_data()
+                ),
+            ),
+        )
+        buf = self.ir_builder.bitcast(
+            self.ir_builder.call(malloc, [size]), element_llvm_ty.as_pointer()
+        )
+        array_type = _type_to_llvm(
+            self.method_compiler.ctx.ir_module, new_array_expr.type
+        )
+        array = self.ir_builder.bitcast(
+            self.ir_builder.call(
+                malloc,
+                [
+                    ir.IntType(64)(
+                        array_type.pointee.get_abi_size(
+                            self.method_compiler.ctx.get_target_data()
+                        )
+                    )
+                ],
+            ),
+            array_type,
+        )
+        self.ir_builder.store(
+            buf,
+            self.ir_builder.gep(
+                array,
+                [
+                    ir.IntType(32)(0),
+                    ir.IntType(32)(new_array_expr.type.get_field_index("_elements")),
+                ],
+                inbounds=True,
+            ),
+        )
+        self.ir_builder.store(
+            length,
+            self.ir_builder.gep(
+                array,
+                [
+                    ir.IntType(32)(0),
+                    ir.IntType(32)(new_array_expr.type.get_field_index("length")),
+                ],
+                inbounds=True,
+            ),
+        )
+        self._prev_expr = array
 
     def visit_dot_expr(self, dot_expr: typed_ast.DotExpr) -> None:
         # TODO: evaluate_expr, basically annotate the AST nodes with their
@@ -623,27 +753,11 @@ class ExpressionCompiler(typed_ast.TypedAstVisitor):
         return function
 
     def visit_call_expr(self, call_expr: typed_ast.CallExpr) -> None:
-        def cstr(bytes_: bytes) -> ir.Value:
-            ty = ir.ArrayType(ir.IntType(8), len(bytes_))
-            ptr = self.ir_builder.alloca(ty)
-            self.ir_builder.store(ty(bytearray(bytes_)), ptr)
-            return self.ir_builder.bitcast(ptr, ir.IntType(8).as_pointer())
-
-        if call_expr.name.name == "print":
-            function = ir.Function(
-                self.method_compiler.ctx.ir_module,
-                ir.FunctionType(
-                    ir.VoidType(),
-                    [ir.IntType(8).as_pointer()],
-                    var_arg=True,
-                ),
-                "printf",
-            )
-            args = [cstr(b"%s: %d\n\0"), cstr(b"hello\0")]
-        else:
+        function = intrinsics.get_intrinsic(self.method_compiler.ctx, call_expr.method)
+        if function is None:
             function = self._get_compiled_method(call_expr.method)
-            args = []
 
+        args = []
         if not call_expr.method.static:
             if call_expr.expr:
                 args.append(self._compile_expression(call_expr.expr))
@@ -653,3 +767,6 @@ class ExpressionCompiler(typed_ast.TypedAstVisitor):
             args.append(self._compile_expression(arg))
 
         self._prev_expr = self.ir_builder.call(function, args)
+
+
+from joe import intrinsics  # noqa: E402

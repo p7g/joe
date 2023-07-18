@@ -347,17 +347,32 @@ def evaluate_expr(
             if expr_ast.expr and not method.static
             else None
         )
-        args = [evaluate_expr(env, scope, arg) for arg in expr_ast.arguments]
+        args = [
+            _maybe_resize_integer(param, evaluate_expr(env, scope, arg))
+            for param, arg in zip(
+                method.get_parameter_types(), expr_ast.arguments, strict=True
+            )
+        ]
         return typed_ast.CallExpr(method, expr_ast, receiver, expr_ast.name, args)
     elif isinstance(expr_ast, ast.NewExpr):
         ty = evaluate_type(env, expr_ast.type)
-        return typed_ast.NewExpr(
-            ty, expr_ast, [evaluate_expr(env, scope, arg) for arg in expr_ast.arguments]
-        )
+        constructor = ty.get_constructor()
+        constructor_params = constructor.get_parameter_types() if constructor else None
+        args = []
+        for i, arg in enumerate(expr_ast.arguments):
+            arg_expr = evaluate_expr(env, scope, arg)
+            if constructor_params is not None:
+                arg_expr = _maybe_resize_integer(constructor_params[i], arg_expr)
+            args.append(arg_expr)
+        return typed_ast.NewExpr(ty, expr_ast, args)
     elif isinstance(expr_ast, ast.IndexExpr):
         array = evaluate_expr(env, scope, expr_ast.expr)
-        index = evaluate_expr(env, scope, expr_ast.index)
-        expr_ty = array.type.get_method("get", [index.type]).get_return_type()
+        index = _maybe_resize_integer(
+            # FIXME: should be able to look up types by fully-qualified names
+            env.get_type_constructor("Long").instantiate([]),
+            evaluate_expr(env, scope, expr_ast.index),
+        )
+        expr_ty = array.type.get_method("get", []).get_return_type()
         return typed_ast.IndexExpr(expr_ty, expr_ast, array, index)
     elif isinstance(expr_ast, ast.NewArrayExpr):
         ty = evaluate_type(env, expr_ast.type)
@@ -370,4 +385,28 @@ def evaluate_expr(
     elif isinstance(expr_ast, ast.BinaryExpr):
         lhs = evaluate_expr(env, scope, expr_ast.left)
         rhs = evaluate_expr(env, scope, expr_ast.right)
+
+        if expr_ast.operator is ast.BinaryOperator.ASSIGN:
+            rhs = _maybe_resize_integer(lhs.type, rhs)
+
         return typed_ast.BinaryExpr(lhs.type, expr_ast, expr_ast.operator, lhs, rhs)
+
+
+_integer_type_sizes = {
+    "joe.prelude.Byte<>": 1,
+    # "joe.prelude.Short<>": 2,
+    "joe.prelude.Integer<>": 4,
+    "joe.prelude.Unsigned<>": 4,
+    "joe.prelude.Long<>": 8,
+    "joe.prelude.UnsignedLong<>": 8,
+}
+
+
+def _maybe_resize_integer(dest_type: BoundType, expr: typed_ast.Expr) -> typed_ast.Expr:
+    lhs_size = _integer_type_sizes.get(dest_type.name(), None)
+    rhs_size = _integer_type_sizes.get(expr.type.name(), None)
+    if lhs_size is None or rhs_size is None:
+        return expr
+    if lhs_size != rhs_size:
+        return typed_ast.IntegerCastExpr(dest_type, expr.original_node, expr)
+    return expr

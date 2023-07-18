@@ -1,12 +1,35 @@
 class void {}
-class Integer {
-    void print() {}
-}
 class Double {}
 class Boolean {}
 
-class Array<T> {
-    Integer length;
+interface IInteger {}
+class Byte implements IInteger {}
+class Integer implements IInteger {}
+class Long implements IInteger {}
+class Unsigned implements IInteger {}
+class UnsignedLong implements IInteger {}
 
-    T get(Integer index) {}
+class String {}
+
+class Pointer<T> {}
+
+class Array<T> {
+    Pointer<T> _elements;
+    Long length;
+
+    T get(Long index) {
+        return _elements.deref(index);
+    }
+}
+
+class File {
+    Integer _fd;
+
+    File(Integer fd) { _fd = fd; }
+
+    static File open(String pathname, Integer flags) {}
+    Integer close() {}
+    Long lseek(Integer offset, Integer whence) {}
+    UnsignedLong read(Array<Byte> buf, UnsignedLong count) {}
+    UnsignedLong write(Array<Byte> buf, UnsignedLong count) {}
 }

@@ -68,6 +68,9 @@ class TypedAstVisitor:
         self.visit_expression(array_access_expr.expr)
         self.visit_expression(array_access_expr.index)
 
+    def visit_integer_cast_expr(self, integer_cast_expr: "IntegerCastExpr") -> None:
+        self.visit_expression(integer_cast_expr.expr)
+
 
 Expr: TypeAlias = Union[
     "LiteralInt",
@@ -83,6 +86,7 @@ Expr: TypeAlias = Union[
     "BinaryExpr",
     "NewArrayExpr",
     "IndexExpr",
+    "IntegerCastExpr",
 ]
 
 
@@ -267,3 +271,12 @@ class IndexExpr(Node):
 
     def accept(self, visitor: TypedAstVisitor) -> None:
         visitor.visit_index_expr(self)
+
+
+class IntegerCastExpr(Node):
+    def __init__(self, type_: "BoundType", original_node: ast.Node, expr: Expr) -> None:
+        super().__init__(type_, original_node)
+        self.expr = expr
+
+    def accept(self, visitor: TypedAstVisitor) -> None:
+        visitor.visit_integer_cast_expr(self)
