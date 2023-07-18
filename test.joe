@@ -8,6 +8,11 @@ class Main {
             UnsignedLong nread = f.read(buf, bufsz);
             if (nread == 0) {
                 f.close();
+                delete f;
+                delete buf;
+                delete stdout;
+                delete buf._elements;
+                delete buf;
                 return 0;
             }
             stdout.write(buf, nread);
