@@ -753,7 +753,13 @@ def _nud(tokens: _Tokens) -> Expr:
 
 
 def _led(tokens: _Tokens, lhs: Expr) -> Expr:
-    if tokens.match(_LEFT_ASSOC_BINARY_OPERATOR_TOKEN_TYPES, consume=False):
+    if tokens.match(TokenType.LEFT_ANGLE_BRACKET, consume=False):
+        try:
+            with tokens.backtrack_on_error():
+                return _parse_call_expression(tokens, lhs)
+        except JoeParseError:
+            return _parse_left_assoc_binary_expression(tokens, lhs)
+    elif tokens.match(_LEFT_ASSOC_BINARY_OPERATOR_TOKEN_TYPES, consume=False):
         return _parse_left_assoc_binary_expression(tokens, lhs)
     elif tokens.match(_RIGHT_ASSOC_BINARY_OPERATOR_TOKEN_TYPES, consume=False):
         return _parse_right_assoc_binary_expression(tokens, lhs)
@@ -762,7 +768,11 @@ def _led(tokens: _Tokens, lhs: Expr) -> Expr:
     elif tokens.match(TokenType.LEFT_BRACKET, consume=False):
         return _parse_index_expression(tokens, lhs)
     elif tokens.match(TokenType.DOT, consume=False):
-        return _parse_dot_expression(tokens, lhs)
+        try:
+            with tokens.backtrack_on_error():
+                return _parse_call_expression_from_dot(tokens, lhs)
+        except JoeParseError:
+            return _parse_dot_expression(tokens, lhs)
     else:
         raise JoeParseError(
             f"Expected expression at {tokens.last_location or 'end of file'}"
@@ -840,6 +850,11 @@ def _parse_index_expression(tokens: _Tokens, lhs: Expr) -> Expr:
     index = _parse_expression(tokens)
     tokens.expect(TokenType.RIGHT_BRACKET)
     return IndexExpr(lhs.location, lhs, index)
+
+
+def _parse_call_expression_from_dot(tokens: _Tokens, receiver: Expr) -> Expr:
+    dot_expr = _parse_dot_expression(tokens, receiver)
+    return _parse_call_expression(tokens, dot_expr)
 
 
 def _parse_call_expression(tokens: _Tokens, callee: Expr) -> Expr:
