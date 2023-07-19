@@ -376,7 +376,10 @@ def evaluate_expr(
         return typed_ast.IndexExpr(expr_ty, expr_ast, array, index)
     elif isinstance(expr_ast, ast.NewArrayExpr):
         ty = evaluate_type(env, expr_ast.type)
-        size = evaluate_expr(env, scope, expr_ast.size)
+        size = _maybe_resize_integer(
+            env.get_type_constructor("Long").instantiate([]),
+            evaluate_expr(env, scope, expr_ast.size),
+        )
         array_ty = env.get_type_constructor("Array").instantiate([ty])
         return typed_ast.NewArrayExpr(array_ty, expr_ast, size)
     elif isinstance(expr_ast, ast.UnaryExpr):
@@ -384,10 +387,7 @@ def evaluate_expr(
         return typed_ast.UnaryExpr(expr.type, expr_ast, expr_ast.operator, expr)
     elif isinstance(expr_ast, ast.BinaryExpr):
         lhs = evaluate_expr(env, scope, expr_ast.left)
-        rhs = evaluate_expr(env, scope, expr_ast.right)
-
-        if expr_ast.operator is ast.BinaryOperator.ASSIGN:
-            rhs = _maybe_resize_integer(lhs.type, rhs)
+        rhs = _maybe_resize_integer(lhs.type, evaluate_expr(env, scope, expr_ast.right))
 
         return typed_ast.BinaryExpr(lhs.type, expr_ast, expr_ast.operator, lhs, rhs)
 
