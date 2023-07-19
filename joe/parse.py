@@ -72,7 +72,6 @@ class TokenType(Enum):
     FALSE = auto()
     FLOAT = auto()
     FOR = auto()
-    GREATER_THAN = auto()
     GREATER_THAN_EQUAL = auto()
     IDENTIFIER = auto()
     IF = auto()
@@ -83,7 +82,6 @@ class TokenType(Enum):
     LEFT_BRACE = auto()
     LEFT_BRACKET = auto()
     LEFT_PAREN = auto()
-    LESS_THAN = auto()
     LESS_THAN_EQUAL = auto()
     MINUS = auto()
     NEW = auto()
@@ -119,7 +117,6 @@ class Token:
 
 
 _one_char_tokens: Final = {
-    "!": TokenType.BANG,
     "%": TokenType.PERCENT,
     "(": TokenType.LEFT_PAREN,
     ")": TokenType.RIGHT_PAREN,
@@ -128,8 +125,6 @@ _one_char_tokens: Final = {
     ".": TokenType.DOT,
     ":": TokenType.COLON,
     ";": TokenType.SEMICOLON,
-    "<": TokenType.LEFT_ANGLE_BRACKET,
-    ">": TokenType.RIGHT_ANGLE_BRACKET,
     "[": TokenType.LEFT_BRACKET,
     "]": TokenType.RIGHT_BRACKET,
     "{": TokenType.LEFT_BRACE,
@@ -156,11 +151,11 @@ _one_or_two_char_tokens: Final = {
         "=": TokenType.BANG_EQUAL,
     },
     ">": {
-        "": TokenType.GREATER_THAN,
+        "": TokenType.RIGHT_ANGLE_BRACKET,
         "=": TokenType.GREATER_THAN_EQUAL,
     },
     "<": {
-        "": TokenType.LESS_THAN,
+        "": TokenType.LEFT_ANGLE_BRACKET,
         "=": TokenType.LESS_THAN_EQUAL,
     },
 }
@@ -236,6 +231,7 @@ def scan(filename: str, chars: Iterable[str]) -> Iterator[Token]:
                 ty = next_chars[c2]
             elif "" in next_chars:
                 ty = next_chars[""]
+                c2 = None
             else:
                 unexpected = repr(c2) if c2 is not None else "end of input"
                 raise JoeParseError(f"Unexpected token {unexpected} at {location}")
@@ -685,9 +681,9 @@ _lbp: Final = {
     TokenType.AMP_AMP: 3,
     TokenType.EQUAL_EQUAL: 4,
     TokenType.BANG_EQUAL: 4,
-    TokenType.LESS_THAN: 5,
+    TokenType.LEFT_ANGLE_BRACKET: 5,
     TokenType.LESS_THAN_EQUAL: 5,
-    TokenType.GREATER_THAN: 5,
+    TokenType.RIGHT_ANGLE_BRACKET: 5,
     TokenType.GREATER_THAN_EQUAL: 5,
     TokenType.PLUS: 6,
     TokenType.MINUS: 6,
@@ -714,9 +710,9 @@ _LEFT_ASSOC_BINARY_OPERATOR_TOKEN_TYPES: Final = frozenset(
         TokenType.ASTERISK,
         TokenType.SLASH,
         TokenType.PERCENT,
-        TokenType.LESS_THAN,
+        TokenType.LEFT_ANGLE_BRACKET,
         TokenType.LESS_THAN_EQUAL,
-        TokenType.GREATER_THAN,
+        TokenType.RIGHT_ANGLE_BRACKET,
         TokenType.GREATER_THAN_EQUAL,
         TokenType.EQUAL_EQUAL,
         TokenType.BANG_EQUAL,
@@ -799,11 +795,11 @@ def _token_type_to_binary_operator(token_type: TokenType) -> BinaryOperator:
         return BinaryOperator.DIVIDE
     elif token_type is TokenType.PERCENT:
         return BinaryOperator.MODULO
-    elif token_type is TokenType.LESS_THAN:
+    elif token_type is TokenType.LEFT_ANGLE_BRACKET:
         return BinaryOperator.LESS_THAN
     elif token_type is TokenType.LESS_THAN_EQUAL:
         return BinaryOperator.LESS_THAN_OR_EQUAL
-    elif token_type is TokenType.GREATER_THAN:
+    elif token_type is TokenType.RIGHT_ANGLE_BRACKET:
         return BinaryOperator.GREATER_THAN
     elif token_type is TokenType.GREATER_THAN_EQUAL:
         return BinaryOperator.GREATER_THAN_OR_EQUAL
