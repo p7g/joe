@@ -324,6 +324,7 @@ def evaluate_expr(
         # not an object
         # FIXME: when referring to static methods, it should not be possible to
         # pass type arguments to the class.
+        receiver_type: BoundType | BoundTypeConstructor
         if isinstance(expr_ast.expr, ast.IdentifierExpr):
             if expr_ast.expr.name.name in scope:
                 receiver_type = evaluate_expr(env, scope, expr_ast.expr).type

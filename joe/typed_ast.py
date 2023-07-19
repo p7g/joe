@@ -46,7 +46,8 @@ class TypedAstVisitor:
         self.visit_expression(dot_expr.expr)
 
     def visit_call_expr(self, call_expr: "CallExpr") -> None:
-        self.visit_expression(call_expr.expr)
+        if call_expr.expr is not None:
+            self.visit_expression(call_expr.expr)
         for arg in call_expr.arguments:
             self.visit_expression(arg)
 

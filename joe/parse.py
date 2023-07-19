@@ -597,6 +597,7 @@ def _parse_while_statement(tokens: _Tokens) -> WhileStatement:
 def _parse_for_statement(tokens: _Tokens) -> ForStatement:
     location = tokens.expect(TokenType.FOR).location
     tokens.expect(TokenType.LEFT_PAREN)
+    init: Statement | None
     if tokens.match(TokenType.VAR, consume=False):
         init = _parse_variable_decl_statement(tokens)
     elif tokens.match(TokenType.SEMICOLON, consume=False):

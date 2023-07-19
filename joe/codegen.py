@@ -2,7 +2,8 @@ from collections import ChainMap
 from itertools import chain
 from typing import TypeAlias
 
-from llvmlite import ir, binding as llvm_binding
+from llvmlite import binding as llvm_binding
+from llvmlite import ir
 
 from joe import ast, eval, typed_ast
 

@@ -8,9 +8,7 @@ def make_pointer_deref(ctx: CompileContext, deref_method: BoundMethod) -> ir.Fun
     assert isinstance(deref_method.self_type, BoundType)
     file_llvm_type = _type_to_llvm(ctx.ir_module, deref_method.self_type)
 
-    deref_ty = _method_to_llvm_type(
-        ctx.ir_module, file_llvm_type, deref_method, True
-    )
+    deref_ty = _method_to_llvm_type(ctx.ir_module, file_llvm_type, deref_method, True)
     deref = ir.Function(ctx.ir_module, deref_ty, name=deref_method.name())
     this_arg, offset_arg = deref.args
 

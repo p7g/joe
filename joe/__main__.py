@@ -1,7 +1,8 @@
 from argparse import ArgumentParser
 from ctypes import CFUNCTYPE, POINTER, c_char_p, c_int
 
-from llvmlite import binding as llvm_binding, ir
+from llvmlite import binding as llvm_binding
+from llvmlite import ir
 
 from joe import eval as joeeval
 from joe.codegen import CompileContext, MethodCompiler, _type_to_llvm

@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
-from enum import Enum, auto
 from collections.abc import Iterable
+from enum import Enum, auto
 from typing import Final, Literal, TypeAlias, Union
 
 

@@ -74,7 +74,9 @@ def make_file_read(ctx: CompileContext, read_method: BoundMethod) -> ir.Function
     buf_ptr = ir_builder.extract_value(buf_arg, 0)
     # FIXME: check the size
     # buf_size = ir_builder.extract_value(buf_arg, 1)
-    ir_builder.ret(ir_builder.call(real_read, [ir_builder.load(fd), buf_ptr, count_arg]))
+    ir_builder.ret(
+        ir_builder.call(real_read, [ir_builder.load(fd), buf_ptr, count_arg])
+    )
 
     return file_read
 
