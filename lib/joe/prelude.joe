@@ -22,6 +22,44 @@ class Array<T> {
     }
 }
 
+class ArrayList<T> {
+    Array<T> _array;
+    Long length;
+
+    ArrayList() {
+        _array = new T[8];
+        length = 0;
+    }
+
+    T get(Long index) {
+        return _array[index];
+    }
+
+    Long push(T value) {
+        _maybeGrow();
+        _array[length] = value;
+        length = length + 1;
+        return length;
+    }
+
+    T pop() {
+        length = length - 1;
+        return _array[length];
+    }
+
+    void _maybeGrow() {
+        if (length < _array.length) {
+            return;
+        }
+        var newArray = new T[_array.length * 2];
+        for (Long i = 0; i < _array.length; i = i + 1) {
+            newArray[i] = _array[i];
+        }
+        delete _array;
+        _array = newArray;
+    }
+}
+
 class File {
     Integer _fd;
 
@@ -32,4 +70,34 @@ class File {
     Long lseek(Integer offset, Integer whence) {}
     UnsignedLong read(Array<Byte> buf, UnsignedLong count) {}
     UnsignedLong write(Array<Byte> buf, UnsignedLong count) {}
+}
+
+class Printer {
+    File outFile;
+
+    Printer(File outFile) {
+        this.outFile = outFile;
+    }
+
+    void printInt<T: IInteger>(T value) {
+        var digits = new ArrayList<Byte>();
+
+        while (value > 0) {
+            digits.push(value % 10);
+            value = value / 10;
+        }
+
+        var buf = new Byte[digits.length];
+        for (var i = digits.length - 1; i >= 0; i = i - 1) {
+            var charCode = digits.get(i) + 48;
+            buf[digits.length - (i + 1)] = charCode;
+        }
+        outFile.write(buf, digits.length);
+    }
+
+    void newLine() {
+        var buf = new Byte[1];
+        buf[0] = 10;
+        outFile.write(buf, 1);
+    }
 }
