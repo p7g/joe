@@ -83,9 +83,11 @@ def _type_to_llvm(ir_module: ir.Module, eval_type: eval.BoundType) -> ir.Type:
             ir_module.get_unique_name(f"{type_name}$$vtable")
         )
         vtable_type.set_body(*vtable_fields)
-        return ir.PointerType(
-            ir.LiteralStructType([ir.PointerType(ir.IntType(8)), vtable_type])
+        interface_type = ir_module.context.get_identified_type(type_name)
+        interface_type.set_body(
+            ir.PointerType(ir.IntType(8)), ir.PointerType(vtable_type)
         )
+        return interface_type
     else:
         type_name = eval_type.name()
         if type_name in ir_module.context.identified_types:
