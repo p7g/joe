@@ -82,9 +82,13 @@ class Printer {
     void printInt<T: IInteger>(T value) {
         var digits = new ArrayList<Byte>();
 
-        while (value > 0) {
-            digits.push(value % 10);
-            value = value / 10;
+        if (value == 0) {
+            digits.push(0);
+        } else {
+            while (value > 0) {
+                digits.push(value % 10);
+                value = value / 10;
+            }
         }
 
         var buf = new Byte[digits.length];
