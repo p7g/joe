@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from collections.abc import Iterable
-from enum import Enum, auto
+from enum import Enum
 from typing import Final, Literal, TypeAlias, Union
 
 
@@ -549,8 +549,8 @@ class NewExpr(Node):
 
 
 class UnaryOperator(Enum):
-    MINUS = auto()
-    NOT = auto()
+    MINUS = "-"
+    NOT = "!"
 
 
 class UnaryExpr(Node):
@@ -566,20 +566,20 @@ class UnaryExpr(Node):
 
 
 class BinaryOperator(Enum):
-    PLUS = auto()
-    MINUS = auto()
-    TIMES = auto()
-    DIVIDE = auto()
-    MODULO = auto()
-    EQUALS = auto()
-    NOT_EQUALS = auto()
-    LESS_THAN = auto()
-    LESS_THAN_OR_EQUAL = auto()
-    GREATER_THAN = auto()
-    GREATER_THAN_OR_EQUAL = auto()
-    AND = auto()
-    OR = auto()
-    ASSIGN = auto()
+    PLUS = "+"
+    MINUS = "-"
+    TIMES = "*"
+    DIVIDE = "/"
+    MODULO = "%"
+    EQUALS = "=="
+    NOT_EQUALS = "!="
+    LESS_THAN = "<"
+    LESS_THAN_OR_EQUAL = "<="
+    GREATER_THAN = ">"
+    GREATER_THAN_OR_EQUAL = ">="
+    AND = "&&"
+    OR = "||"
+    ASSIGN = "="
 
 
 class BinaryExpr(Node):
