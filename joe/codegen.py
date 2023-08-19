@@ -1,11 +1,12 @@
 from collections import ChainMap
+from contextlib import contextmanager
 from itertools import chain
 from typing import TypeAlias
 
 from llvmlite import binding as llvm_binding
 from llvmlite import ir
 
-from joe import ast, eval, typed_ast
+from joe import ast, eval, typed_ast, unparse
 
 # NEED:
 # - a way to get the representation of a type, ideally not coupled to llvm
@@ -277,16 +278,26 @@ class MethodCompiler(ast.AstVisitor):
         type_, value = self._compile_expr_with_type(expr)
         return value
 
+    def _comment(self, text: str) -> None:
+        self.ir_builder.comment(text.replace("\n", " "))
+
     def _compile_expr_with_type(
         self, expr: ast.Expr
     ) -> tuple[eval.BoundType, ir.Value]:
         return ExpressionCompiler(self).compile_expression(expr)
+
+    @contextmanager
+    def _push_scope(self):
+        self.scope = self.scope.new_child()
+        yield
+        self.scope = self.scope.parents
 
     def visit_method_decl(self, method_decl: ast.MethodDecl) -> None:
         super().visit_method_decl(method_decl)
         last_block = self.llvm_function.basic_blocks[-1]
         if not last_block.is_terminated:
             self.ir_builder.position_at_end(last_block)
+            self._comment("implicit return")
             if method_decl.return_type.name.name != "void":
                 self.ir_builder.ret(
                     ir.Constant(self.llvm_function_type.return_type, None)
@@ -297,6 +308,7 @@ class MethodCompiler(ast.AstVisitor):
     def visit_constructor_decl(self, constructor_decl: ast.ConstructorDecl) -> None:
         super().visit_constructor_decl(constructor_decl)
         if self.ir_builder.block and not self.ir_builder.block.is_terminated:
+            self._comment("implicit return")
             self.ir_builder.ret_void()
 
     def visit_return_statement(self, return_statement: ast.ReturnStatement) -> None:
@@ -320,6 +332,9 @@ class MethodCompiler(ast.AstVisitor):
         self._compile_expr(expr_statement.expr)
 
     def visit_if_statement(self, if_statement: ast.IfStatement) -> None:
+        debug_str = f"if ({unparse.unparse(if_statement.condition)})"
+        self._comment(debug_str)
+
         condition = self._compile_expr(if_statement.condition)
 
         then_block = self.llvm_function.append_basic_block()
@@ -328,40 +343,55 @@ class MethodCompiler(ast.AstVisitor):
 
         self.ir_builder.cbranch(condition, then_block, else_block)
 
-        self.ir_builder.position_at_end(then_block)
-        for statement in if_statement.then:
-            statement.accept(self)
+        with self._push_scope():
+            self.ir_builder.position_at_end(then_block)
+            self._comment("if true")
+            for statement in if_statement.then:
+                statement.accept(self)
 
         # i.e. if there is a return
-        if not then_block.is_terminated:
+        assert self.ir_builder.block
+        if not self.ir_builder.block.is_terminated:
             self.ir_builder.branch(after_block)
 
-        self.ir_builder.position_at_end(else_block)
-        for statement in if_statement.else_:
-            statement.accept(self)
-        if not else_block.is_terminated:
+        with self._push_scope():
+            self.ir_builder.position_at_end(else_block)
+            self._comment("else")
+            for statement in if_statement.else_:
+                statement.accept(self)
+
+        assert self.ir_builder.block
+        if not self.ir_builder.block.is_terminated:
             self.ir_builder.branch(after_block)
 
         self.ir_builder.position_at_end(after_block)
+        self._comment(f"END {debug_str}")
 
     def visit_while_statement(self, while_statement: ast.WhileStatement) -> None:
-        condition_block = self.llvm_function.append_basic_block()
         body_block = self.llvm_function.append_basic_block()
+        condition_block = self.llvm_function.append_basic_block()
         after_block = self.llvm_function.append_basic_block()
 
+        debug_str = f"while ({unparse.unparse(while_statement.condition)})"
+        self._comment(debug_str)
         self.ir_builder.branch(condition_block)
 
         self.ir_builder.position_at_end(condition_block)
         condition = self._compile_expr(while_statement.condition)
         self.ir_builder.cbranch(condition, body_block, after_block)
 
-        self.ir_builder.position_at_end(body_block)
-        for statement in while_statement.body:
-            statement.accept(self)
-        if not body_block.is_terminated:
+        with self._push_scope():
+            self.ir_builder.position_at_end(body_block)
+            self._comment("while body")
+            for statement in while_statement.body:
+                statement.accept(self)
+
+        assert self.ir_builder.block
+        if not self.ir_builder.block.is_terminated:
             self.ir_builder.branch(condition_block)
 
         self.ir_builder.position_at_end(after_block)
+        self._comment(f"END {debug_str}")
 
     def visit_for_statement(self, for_statement: ast.ForStatement) -> None:
         condition_block = self.llvm_function.append_basic_block()
@@ -369,31 +399,38 @@ class MethodCompiler(ast.AstVisitor):
         body_block = self.llvm_function.append_basic_block()
         after_block = self.llvm_function.append_basic_block()
 
-        self.scope = self.scope.new_child()
-        if for_statement.init:
-            for_statement.init.accept(self)
+        debug_str = unparse.unparse(for_statement).splitlines()[0]
+        self._comment(debug_str)
+        with self._push_scope():
+            if for_statement.init:
+                self._comment("for init")
+                for_statement.init.accept(self)
 
-        if for_statement.condition:
+            if for_statement.condition:
+                self.ir_builder.branch(condition_block)
+                self.ir_builder.position_at_end(condition_block)
+                self._comment("for condition")
+                condition = self._compile_expr(for_statement.condition)
+                self.ir_builder.cbranch(condition, body_block, after_block)
+            else:
+                self.ir_builder.branch(body_block)
+
+            self.ir_builder.position_at_end(body_block)
+            self._comment("for body")
+            for statement in for_statement.body:
+                statement.accept(self)
+
+            assert self.ir_builder.block
+            if not self.ir_builder.block.is_terminated:
+                self.ir_builder.branch(update_block)
+
+            self.ir_builder.position_at_end(update_block)
+            self._comment("for update")
+            if for_statement.update:
+                self._compile_expr(for_statement.update)
             self.ir_builder.branch(condition_block)
-            self.ir_builder.position_at_end(condition_block)
-            condition = self._compile_expr(for_statement.condition)
-            self.ir_builder.cbranch(condition, body_block, after_block)
-        else:
-            self.ir_builder.branch(body_block)
 
-        self.ir_builder.position_at_end(body_block)
-        for statement in for_statement.body:
-            statement.accept(self)
-
-        if not update_block.is_terminated:
-            self.ir_builder.branch(update_block)
-        self.ir_builder.position_at_end(update_block)
-        if for_statement.update:
-            self._compile_expr(for_statement.update)
-        self.ir_builder.branch(condition_block)
-
-        self.ir_builder.position_at_end(after_block)
-        self.scope = self.scope.parents
+            self.ir_builder.position_at_end(after_block)
 
     def visit_variable_decl_statement(
         self, variable_decl_statement: ast.VariableDeclStatement
@@ -408,7 +445,10 @@ class MethodCompiler(ast.AstVisitor):
                 self.method.environment, variable_decl_statement.type
             )
             expr = ir.Constant(_type_to_llvm(self.ctx.ir_module, type_), ir.Undefined)
-        location = self.ir_builder.alloca(_type_to_llvm(self.ctx.ir_module, type_))
+        location = self.ir_builder.alloca(
+            _type_to_llvm(self.ctx.ir_module, type_),
+            name=variable_decl_statement.name.name,
+        )
         self.ir_builder.store(expr, location)
         self.scope[variable_decl_statement.name.name] = location
         self.variable_types[variable_decl_statement.name.name] = type_
@@ -519,9 +559,8 @@ class ExpressionCompiler(typed_ast.TypedAstVisitor):
         )
 
     def visit_binary_expr(self, binary_expr: typed_ast.BinaryExpr) -> None:
-        left = self._compile_expression(binary_expr.left)
-
         if binary_expr.operator is ast.BinaryOperator.AND:
+            left = self._compile_expression(binary_expr.left)
             prev_block = self.ir_builder.block
             left_is_false = self.ir_builder.icmp_signed(
                 "==",
@@ -560,6 +599,7 @@ class ExpressionCompiler(typed_ast.TypedAstVisitor):
             self._prev_expr = self.ir_builder.not_(result_is_false)
             return
         elif binary_expr.operator is ast.BinaryOperator.OR:
+            left = self._compile_expression(binary_expr.left)
             prev_block = self.ir_builder.block
             left_is_false = self.ir_builder.icmp_signed(
                 "==",
@@ -632,6 +672,7 @@ class ExpressionCompiler(typed_ast.TypedAstVisitor):
                 raise NotImplementedError(binary_expr.left)
             return
 
+        left = self._compile_expression(binary_expr.left)
         right = self._compile_expression(binary_expr.right)
         if binary_expr.operator is ast.BinaryOperator.PLUS:
             self._prev_expr = self.ir_builder.add(left, right)
