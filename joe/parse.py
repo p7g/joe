@@ -510,7 +510,7 @@ def _parse_member(
             )
     else:
         tokens.expect(TokenType.SEMICOLON)
-        return FieldDecl(type_.location, type_, name)
+        return FieldDecl(type_.location, type_, name, static)
 
 
 def _parse_param_list(tokens: _Tokens) -> list[Parameter]:

@@ -35,7 +35,8 @@ class Environment:
 class BoundTypeConstructor:
     def __init__(self, module: "Module", decl_ast: ast.ClassDecl | ast.InterfaceDecl):
         self.module = module
-        self.environment = module.environment
+        self.environment = module.environment.new_child()
+        self.environment.type_scope["Self"] = self
         self.decl_ast = decl_ast
 
     def instantiate(self, arguments: Iterable["BoundType"]) -> "BoundType":
@@ -56,6 +57,18 @@ class BoundTypeConstructor:
             and member.static
         )
         return BoundMethod(self, method, type_arguments, method.static)
+
+    def get_field(self, name: str) -> "BoundType":
+        """Can only find static fields"""
+        assert isinstance(self.decl_ast, ast.ClassDecl)
+        field = next(
+            member
+            for member in self.decl_ast.members
+            if isinstance(member, ast.FieldDecl)
+            and member.name.name == name
+            and member.static
+        )
+        return evaluate_type(self.environment, field.type)
 
 
 class BoundType:
@@ -88,7 +101,11 @@ class BoundType:
     def get_field(self, name: str) -> "BoundType":
         assert isinstance(self.decl_ast, ast.ClassDecl)
         field = next(
-            member for member in self.decl_ast.members if member.name.name == name
+            member
+            for member in self.decl_ast.members
+            if isinstance(member, ast.FieldDecl)
+            and member.name.name == name
+            and not member.static
         )
         assert isinstance(field, ast.FieldDecl)
         return evaluate_type(self.environment, field.type)
@@ -98,7 +115,9 @@ class BoundType:
         idx, field = next(
             (idx, member)
             for idx, member in enumerate(self.decl_ast.members)
-            if member.name.name == name
+            if isinstance(member, ast.FieldDecl)
+            and member.name.name == name
+            and not member.static
         )
         assert isinstance(field, ast.FieldDecl)
         return idx
@@ -316,9 +335,25 @@ def evaluate_expr(
             env.get_type_constructor("Double").instantiate([]), expr_ast, expr_ast.value
         )
     elif isinstance(expr_ast, ast.DotExpr):
-        obj_expr = evaluate_expr(env, scope, expr_ast.expr)
-        field_type = obj_expr.type.get_field(expr_ast.name.name)
-        return typed_ast.DotExpr(field_type, expr_ast, obj_expr, expr_ast.name)
+        receiver_type: BoundType | BoundTypeConstructor
+        if isinstance(expr_ast.expr, ast.IdentifierExpr):
+            if expr_ast.expr.name.name in scope:
+                receiver_type = evaluate_expr(env, scope, expr_ast.expr).type
+            else:
+                receiver_type = env.get_type_constructor(expr_ast.expr.name.name)
+        else:
+            receiver_type = evaluate_expr(env, scope, expr_ast.expr).type
+
+        field = receiver_type.get_field(expr_ast.name.name)
+        if isinstance(receiver_type, BoundTypeConstructor):
+            assert isinstance(receiver_type, BoundTypeConstructor)
+            return typed_ast.StaticDotExpr(
+                field.type, expr_ast, receiver_type, expr_ast.name
+            )
+        else:
+            obj_expr = evaluate_expr(env, scope, expr_ast.expr)
+            field_type = obj_expr.type.get_field(expr_ast.name.name)
+            return typed_ast.DotExpr(field_type, expr_ast, obj_expr, expr_ast.name)
     elif isinstance(expr_ast, ast.CallExpr):
         # NOTE: receiver could actually be an identifier referring to a type,
         # not an object
@@ -331,11 +366,13 @@ def evaluate_expr(
             else:
                 receiver_type = env.get_type_constructor(expr_ast.expr.name.name)
         elif expr_ast.expr is None:
-            this_type = scope["this"]
+            this_type = scope["this"] if "this" in scope else env.type_scope["Self"]
             try:
                 this_type.get_method(expr_ast.name.name, [])
                 receiver_type = this_type
             except StopIteration:
+                # Can call static methods from instance methods
+                assert isinstance(this_type, BoundType)
                 receiver_type = this_type.type_constructor
         else:
             receiver_type = evaluate_expr(env, scope, expr_ast.expr).type

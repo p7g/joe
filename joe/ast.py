@@ -360,12 +360,15 @@ class MethodDecl(Node):
 
 
 class FieldDecl(Node):
-    __slots__ = ("type", "name")
+    __slots__ = ("type", "name", "static")
 
-    def __init__(self, location: Location, type_: Type, name: Identifier) -> None:
+    def __init__(
+        self, location: Location, type_: Type, name: Identifier, static: bool
+    ) -> None:
         super().__init__(location)
         self.type = type_
         self.name = name
+        self.static = static
 
     def accept(self, visitor: AstVisitor) -> None:
         visitor.visit_field_decl(self)

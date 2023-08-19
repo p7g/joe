@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, TypeAlias, Union
 from joe import ast
 
 if TYPE_CHECKING:
-    from .eval import BoundMethod, BoundType
+    from .eval import BoundMethod, BoundType, BoundTypeConstructor
 
 
 class Node(ABC):
@@ -45,6 +45,9 @@ class TypedAstVisitor:
     def visit_dot_expr(self, dot_expr: "DotExpr") -> None:
         self.visit_expression(dot_expr.expr)
 
+    def visit_static_dot_expr(self, static_dot_expr: "StaticDotExpr") -> None:
+        pass
+
     def visit_call_expr(self, call_expr: "CallExpr") -> None:
         if call_expr.expr is not None:
             self.visit_expression(call_expr.expr)
@@ -81,6 +84,7 @@ Expr: TypeAlias = Union[
     "IdentifierExpr",
     "ThisExpr",
     "DotExpr",
+    "StaticDotExpr",
     "CallExpr",
     "NewExpr",
     "UnaryExpr",
@@ -175,6 +179,24 @@ class DotExpr(Node):
 
     def accept(self, visitor: TypedAstVisitor) -> None:
         visitor.visit_dot_expr(self)
+
+
+class StaticDotExpr(Node):
+    __slots__ = ("type_constructor", "name")
+
+    def __init__(
+        self,
+        type_: "BoundType",
+        original_node: ast.Node,
+        type_constructor: "BoundTypeConstructor",
+        name: ast.Identifier,
+    ) -> None:
+        super().__init__(type_, original_node)
+        self.type_constructor = type_constructor
+        self.name = name
+
+    def accept(self, visitor: TypedAstVisitor) -> None:
+        visitor.visit_static_dot_expr(self)
 
 
 class CallExpr(Node):

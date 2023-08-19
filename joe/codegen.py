@@ -184,6 +184,22 @@ class MethodCompiler(ast.AstVisitor):
         self.ir_builder = ir.IRBuilder(self.llvm_function.append_basic_block("entry"))
         object_scope = {}
         object_variable_types = {}
+        type_constructor = (
+            method.self_type.type_constructor
+            if isinstance(method.self_type, eval.BoundType)
+            else method.self_type
+        )
+        for field_ast in type_constructor.decl_ast.members:
+            if not isinstance(field_ast, ast.FieldDecl) or not field_ast.static:
+                continue
+            type_ = object_variable_types[
+                field_ast.name.name
+            ] = type_constructor.get_field(field_ast.name.name)
+            object_scope[field_ast.name.name] = self._get_static_field_var(
+                type_constructor,
+                type_,
+                field_ast.name.name,
+            )
         if not method.static:
             assert isinstance(method.self_type, eval.BoundType)
             for field_ast in method.self_type.type_constructor.decl_ast.members:
@@ -192,6 +208,7 @@ class MethodCompiler(ast.AstVisitor):
                 object_variable_types[field_ast.name.name] = method.self_type.get_field(
                     field_ast.name.name
                 )
+                # FIXME: do this as-needed
                 object_scope[field_ast.name.name] = self.ir_builder.gep(
                     self.llvm_function.args[0],  # this
                     [
@@ -226,6 +243,25 @@ class MethodCompiler(ast.AstVisitor):
             self.variable_types[param_name] = param_type
         self._prev_expr = None
         self._free = None
+
+    def _get_static_field_var(
+        self,
+        type_constructor: eval.BoundTypeConstructor,
+        type_: eval.BoundType,
+        name: str,
+    ) -> ir.Value:
+        type_ = type_constructor.get_field(name)
+        var_name = f"{type_constructor.name()}.{name}"
+        try:
+            return self.ctx.ir_module.get_global(var_name)
+        except KeyError:
+            global_var = ir.GlobalVariable(
+                self.ctx.ir_module,
+                _type_to_llvm(self.ctx.ir_module, type_),
+                var_name,
+            )
+            global_var.linkage = "internal"
+            return global_var
 
     def _compile_type(self, type_: ast.Type) -> ir.Type:
         self._prev_type = None
@@ -567,6 +603,9 @@ class ExpressionCompiler(typed_ast.TypedAstVisitor):
             elif isinstance(binary_expr.left, typed_ast.DotExpr):
                 field_ptr = self._struct_field_ptr(binary_expr.left)
                 self.ir_builder.store(new_value, field_ptr)
+            elif isinstance(binary_expr.left, typed_ast.StaticDotExpr):
+                global_var = self._get_static_field_var(binary_expr.left)
+                self.ir_builder.store(new_value, global_var)
             elif isinstance(binary_expr.left, typed_ast.IndexExpr):
                 array_ptr = self._compile_expression(binary_expr.left.expr)
                 index = self._compile_expression(binary_expr.left.index)
@@ -741,6 +780,11 @@ class ExpressionCompiler(typed_ast.TypedAstVisitor):
         # This is needed so we can figure out how to even access attributes of
         # the object.
         self._prev_expr = self.ir_builder.load(self._struct_field_ptr(dot_expr))
+
+    def visit_static_dot_expr(self, static_dot_expr: typed_ast.StaticDotExpr) -> None:
+        self._prev_expr = self.ir_builder.load(
+            self._get_static_field_var(static_dot_expr)
+        )
 
     def _get_compiled_method(self, method: eval.BoundMethod) -> ir.Function:
         try:
