@@ -14,6 +14,9 @@ arg_parser.add_argument(
     "--main", type=str, help="Main function to run", default="Main.main"
 )
 arg_parser.add_argument("--dump-llvm", action="store_true", help="Dump LLVM IR")
+arg_parser.add_argument(
+    "--run", action="store_true", help="Run the program after compilation"
+)
 args, remaining_args = arg_parser.parse_known_args()
 
 with open(args.FILE, "r") as f:
@@ -76,6 +79,7 @@ ir_builder.store(
 )
 ir_builder.ret(ir_builder.call(compiler.llvm_function, [args_array]))
 
+compiler.ctx.ir_module.triple = llvm_binding.get_default_triple()
 llvm_ir = str(compiler.ctx.ir_module)
 if args.dump_llvm:
     print(llvm_ir)
@@ -86,12 +90,14 @@ backing_mod = llvm_binding.parse_assembly("")
 engine = llvm_binding.create_mcjit_compiler(backing_mod, target_machine)
 mod = llvm_binding.parse_assembly(llvm_ir)
 mod.verify()
-engine.add_module(mod)
-engine.finalize_object()
-engine.run_static_constructors()
 
-func_ptr = engine.get_function_address("main")
-cfunc = CFUNCTYPE(c_int, c_int, POINTER(c_char_p))(func_ptr)
-args_array = (c_char_p * len(remaining_args))()
-args_array[:] = [arg.encode("ascii") for arg in remaining_args]
-cfunc(len(remaining_args), args_array)
+if args.run:
+    engine.add_module(mod)
+    engine.finalize_object()
+    engine.run_static_constructors()
+
+    func_ptr = engine.get_function_address("main")
+    cfunc = CFUNCTYPE(c_int, c_int, POINTER(c_char_p))(func_ptr)
+    args_array = (c_char_p * len(remaining_args))()
+    args_array[:] = [arg.encode("ascii") for arg in remaining_args]
+    cfunc(len(remaining_args), args_array)
