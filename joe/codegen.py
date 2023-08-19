@@ -193,12 +193,11 @@ class MethodCompiler(ast.AstVisitor):
         for field_ast in type_constructor.decl_ast.members:
             if not isinstance(field_ast, ast.FieldDecl) or not field_ast.static:
                 continue
-            type_ = object_variable_types[
+            object_variable_types[field_ast.name.name] = type_constructor.get_field(
                 field_ast.name.name
-            ] = type_constructor.get_field(field_ast.name.name)
+            )
             object_scope[field_ast.name.name] = self._get_static_field_var(
                 type_constructor,
-                type_,
                 field_ast.name.name,
             )
         if not method.static:
@@ -248,7 +247,6 @@ class MethodCompiler(ast.AstVisitor):
     def _get_static_field_var(
         self,
         type_constructor: eval.BoundTypeConstructor,
-        type_: eval.BoundType,
         name: str,
     ) -> ir.Value:
         type_ = type_constructor.get_field(name)
@@ -556,6 +554,14 @@ class ExpressionCompiler(typed_ast.TypedAstVisitor):
             struct_ptr,
             [ir.Constant(ir.IntType(32), 0), ir.Constant(ir.IntType(32), field_index)],
             inbounds=True,
+        )
+
+    def _get_static_field_var(
+        self,
+        static_dot_expr: typed_ast.StaticDotExpr,
+    ) -> ir.Value:
+        return self.method_compiler._get_static_field_var(
+            static_dot_expr.type_constructor, static_dot_expr.name.name
         )
 
     def visit_binary_expr(self, binary_expr: typed_ast.BinaryExpr) -> None:

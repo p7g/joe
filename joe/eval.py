@@ -344,11 +344,11 @@ def evaluate_expr(
         else:
             receiver_type = evaluate_expr(env, scope, expr_ast.expr).type
 
-        field = receiver_type.get_field(expr_ast.name.name)
+        field_type = receiver_type.get_field(expr_ast.name.name)
         if isinstance(receiver_type, BoundTypeConstructor):
             assert isinstance(receiver_type, BoundTypeConstructor)
             return typed_ast.StaticDotExpr(
-                field.type, expr_ast, receiver_type, expr_ast.name
+                field_type, expr_ast, receiver_type, expr_ast.name
             )
         else:
             obj_expr = evaluate_expr(env, scope, expr_ast.expr)
