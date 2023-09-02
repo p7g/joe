@@ -23,21 +23,29 @@ def _method_to_llvm_type(
     this_type: ir.Type | None,
     bound_method: eval.BoundMethod | eval.BoundConstructor,
     static: bool,
+    in_progress: dict[str, ir.Type] | None = None,
 ) -> ir.FunctionType:
     parameters: list[ir.Type] = (
         [this_type] if this_type is not None and not static else []
     )
     for param in bound_method.get_parameter_types():
-        parameters.append(_type_to_llvm(ir_module, param))
+        parameters.append(_type_to_llvm(ir_module, param, in_progress=in_progress))
     return_type = (
         ir.VoidType()
         if isinstance(bound_method, eval.BoundConstructor)
-        else _type_to_llvm(ir_module, bound_method.get_return_type())
+        else _type_to_llvm(
+            ir_module, bound_method.get_return_type(), in_progress=in_progress
+        )
     )
     return ir.FunctionType(return_type, parameters)
 
 
-def _type_to_llvm(ir_module: ir.Module, eval_type: eval.BoundType) -> ir.Type:
+def _type_to_llvm(
+    ir_module: ir.Module,
+    eval_type: eval.BoundType,
+    *,
+    in_progress: dict[str, ir.Type] | None = None,
+) -> ir.Type:
     name = eval_type.type_constructor.name()
     if name == "joe.prelude.void":
         return ir.VoidType()
@@ -68,6 +76,8 @@ def _type_to_llvm(ir_module: ir.Module, eval_type: eval.BoundType) -> ir.Type:
         type_name = eval_type.name()
         if type_name in ir_module.context.identified_types:
             return ir_module.context.get_identified_type(type_name).as_pointer()
+        interface_type = ir_module.context.get_identified_type(type_name)
+        in_progress2 = {**(in_progress or {}), type_name: interface_type}
         vtable_fields = []
         for method in eval_type.type_constructor.decl_ast.members:
             if isinstance(method, ast.MethodDecl):
@@ -78,13 +88,13 @@ def _type_to_llvm(ir_module: ir.Module, eval_type: eval.BoundType) -> ir.Type:
                     ir.PointerType(ir.IntType(8)),
                     bound_method,
                     bound_method.static,
+                    in_progress=in_progress2,
                 )
                 vtable_fields.append(ir.PointerType(method_type))
         vtable_type = ir_module.context.get_identified_type(
             ir_module.get_unique_name(f"{type_name}$$vtable")
         )
         vtable_type.set_body(*vtable_fields)
-        interface_type = ir_module.context.get_identified_type(type_name)
         interface_type.set_body(
             ir.PointerType(ir.IntType(8)), ir.PointerType(vtable_type)
         )
@@ -93,14 +103,21 @@ def _type_to_llvm(ir_module: ir.Module, eval_type: eval.BoundType) -> ir.Type:
         type_name = eval_type.name()
         if type_name in ir_module.context.identified_types:
             return ir_module.context.get_identified_type(type_name).as_pointer()
+        elif in_progress is not None and type_name in in_progress:
+            return in_progress[type_name].as_pointer()
         fields = []
+        class_type = ir_module.context.get_identified_type(type_name)
+        in_progress2 = {**(in_progress or {}), type_name: class_type}
         # FIXME: O(n^2)
         for field in eval_type.type_constructor.decl_ast.members:
             if isinstance(field, ast.FieldDecl):
                 fields.append(
-                    _type_to_llvm(ir_module, eval_type.get_field(field.name.name))
+                    _type_to_llvm(
+                        ir_module,
+                        eval_type.get_field(field.name.name),
+                        in_progress=in_progress2,
+                    )
                 )
-        class_type = ir_module.context.get_identified_type(type_name)
         class_type.set_body(*fields)
         return ir.PointerType(class_type)
 
