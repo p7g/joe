@@ -5,7 +5,7 @@ from llvmlite import ir
 
 from joe.codegen import CompileContext
 from joe.eval import BoundMethod, BoundTypeConstructor
-from joe.intrinsics import file, pointer
+from joe.intrinsics import file, pointer, string
 
 _Factories: TypeAlias = Mapping[
     str, Mapping[str, Callable[[CompileContext, BoundMethod], ir.Function]]
@@ -21,6 +21,11 @@ _factories: Final[_Factories] = {
     },
     "joe.prelude.Pointer": {
         "deref<>": pointer.make_pointer_deref,
+        "asArray<>": pointer.make_pointer_as_array,
+    },
+    "joe.prelude.String": {
+        "asPointer<>": string.make_string_as_pointer,
+        "length<>": string.make_string_length,
     },
 }
 

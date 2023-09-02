@@ -9,9 +9,19 @@ class Long implements IInteger {}
 class Unsigned implements IInteger {}
 class UnsignedLong implements IInteger {}
 
-class String {}
+class String {
+    UnsignedLong length() {}
+    Pointer<Byte> asPointer() {}
 
-class Pointer<T> {}
+    Array<Byte> asByteArray() {
+        return asPointer().asArray(length() + 1);
+    }
+}
+
+class Pointer<T> {
+    T _deref(UnsignedLong index) {}
+    Array<T> asArray(UnsignedLong length) {}
+}
 
 class Array<T> {
     Pointer<T> _elements;
@@ -33,6 +43,10 @@ class ArrayList<T> {
 
     T get(Long index) {
         return _array[index];
+    }
+
+    void set(Long index, T newValue) {
+        _array[index] = newValue;
     }
 
     Long push(T value) {
