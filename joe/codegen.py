@@ -309,8 +309,8 @@ class MethodCompiler(ast.AstVisitor):
 
     def visit_method_decl(self, method_decl: ast.MethodDecl) -> None:
         super().visit_method_decl(method_decl)
-        last_block = self.llvm_function.basic_blocks[-1]
-        if not last_block.is_terminated:
+        last_block = self.ir_builder.block
+        if last_block and not last_block.is_terminated:
             self.ir_builder.position_at_end(last_block)
             self._comment("implicit return")
             if method_decl.return_type.name.name != "void":
