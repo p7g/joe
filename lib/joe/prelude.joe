@@ -72,6 +72,14 @@ class ArrayList<T> {
         delete _array;
         _array = newArray;
     }
+
+    Array<T> asArray() {
+        var newArr = new T[length];
+        for (Long i = 0; i < length; i = i + 1) {
+            newArr[i] = _array[i];
+        }
+        return newArr;
+    }
 }
 
 class File {

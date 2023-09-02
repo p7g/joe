@@ -63,13 +63,15 @@ class Parser {
             } else if (c == 91) {
                 ops.push(new Op(3, 0, parse(f)));
             } else if (c == 93) {
-                var opArray = ops._array;
+                var opArray = ops.asArray();
+                delete ops._array;
                 delete ops;
                 return opArray;
             }
         }
 
-        var opArray = ops._array;
+        var opArray = ops.asArray();
+        delete ops._array;
         delete ops;
         return opArray;
     }
