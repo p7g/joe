@@ -277,7 +277,8 @@ class _Unparser(ast.AstVisitor):
         self._append("for (")
         if for_statement.init:
             for_statement.init.accept(self)
-        self._append(";")
+        else:
+            self._append(";")
         if for_statement.condition:
             self._append(" ")
             for_statement.condition.accept(self)
