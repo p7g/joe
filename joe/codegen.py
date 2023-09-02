@@ -672,6 +672,7 @@ class ExpressionCompiler(typed_ast.TypedAstVisitor):
             elif isinstance(binary_expr.left, typed_ast.IndexExpr):
                 array_ptr = self._compile_expression(binary_expr.left.expr)
                 index = self._compile_expression(binary_expr.left.index)
+                # TODO: Use method on Array instead of inlining
                 array_buf = self.ir_builder.load(
                     self.ir_builder.gep(
                         array_ptr,
@@ -734,25 +735,11 @@ class ExpressionCompiler(typed_ast.TypedAstVisitor):
     def visit_index_expr(self, index_expr: typed_ast.IndexExpr) -> None:
         array_ptr = self._compile_expression(index_expr.expr)
         index = self._compile_expression(index_expr.index)
-        array_buf = self.ir_builder.load(
-            self.ir_builder.gep(
-                array_ptr,
-                [
-                    ir.Constant(ir.IntType(32), 0),
-                    ir.Constant(
-                        ir.IntType(32),
-                        index_expr.expr.type.get_field_index("_elements"),
-                    ),
-                ],
-            )
-        )
-        self._prev_expr = self.ir_builder.load(
-            self.ir_builder.gep(
-                array_buf,
-                [
-                    self.ir_builder.sext(index, ir.IntType(64)),
-                ],
-            ),
+
+        get_method_type = index_expr.expr.type.get_method("get", [])
+        func = self._get_compiled_method(get_method_type)
+        self._prev_expr = self.ir_builder.call(
+            func, [array_ptr, self.ir_builder.sext(index, ir.IntType(64))]
         )
 
     def visit_new_expr(self, new_expr: typed_ast.NewExpr) -> None:

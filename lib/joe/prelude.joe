@@ -19,7 +19,7 @@ class String {
 }
 
 class Pointer<T> {
-    T _deref(UnsignedLong index) {}
+    T deref(UnsignedLong index) {}
     Array<T> asArray(UnsignedLong length) {}
 }
 
