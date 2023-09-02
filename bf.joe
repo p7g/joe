@@ -1,0 +1,128 @@
+class Tape {
+    Integer pos;
+    ArrayList<Byte> data;
+
+    Tape() {
+        pos = 0;
+        data = new ArrayList<Byte>();
+    }
+
+    Byte get() {
+        return data.get(pos);
+    }
+
+    void inc(Integer amount) {
+        data.set(pos, data.get(pos) + amount);
+    }
+
+    void move(Integer amount) {
+        pos = pos + amount;
+    }
+}
+
+class Op {
+    Integer type;
+    Integer amount;
+    Array<Op> loopOps;
+
+    Op(Integer type, Integer amount, Array<Op> loopOps) {
+        this.type = type;
+        this.amount = amount;
+        this.loopOps = loopOps;
+    }
+
+    void deinit() {
+        if (type != 3) return;
+
+        for (Integer i = 0; i < loopOps.length; i = i + 1) {
+            loopOps[i].deinit();
+            delete loopOps[i];
+        }
+        delete loopOps;
+    }
+}
+
+class Parser {
+    static Array<Op> parse(File f) {
+        var ops = new ArrayList<Op>();
+        Array<Op> uninitOps;
+
+        var buf = new Byte[2];
+        while (f.read(buf, 1) != -1) {
+            var c = buf[0];
+            if (c == 43) {
+                ops.push(new Op(0, 1, uninitOps));
+            } else if (c == 45) {
+                ops.push(new Op(0, -1, uninitOps));
+            } else if (c == 60) {
+                ops.push(new Op(1, -1, uninitOps));
+            } else if (c == 62) {
+                ops.push(new Op(1, 1, uninitOps));
+            } else if (c == 46) {
+                ops.push(new Op(2, 0, uninitOps));
+            } else if (c == 91) {
+                ops.push(new Op(3, 0, parse(f)));
+            } else if (c == 93) {
+                var opArray = ops._array;
+                delete ops;
+                return opArray;
+            }
+        }
+
+        var opArray = ops._array;
+        delete ops;
+        return opArray;
+    }
+}
+
+class Main {
+    static File stdout;
+
+    static Integer main(Array<String> args) {
+        if (args.length < 1) {
+            var stdout = new File(2);
+            var msg = "Expected filename arg\n".asByteArray();
+            stdout.write(msg, msg.length);
+            delete stdout;
+            return 1;
+        }
+
+        var f = File.open(args[0], 0);
+
+        var ops = Parser.parse(f);
+
+        f.close();
+        delete f;
+
+        var tape = new Tape();
+        stdout = new File(1);
+
+        run(tape, ops);
+
+        var x = new Op(0, 0, ops);
+        x.deinit();
+        delete x;
+        delete tape;
+        delete stdout;
+    }
+
+    static void run(Tape tape, Array<Op> ops) {
+        for (Integer i = 0; i < ops.length; i = i + 1) {
+            var op = ops[i];
+            if (op.type == 0) {
+                tape.inc(op.amount);
+            } else if (op.type == 1) {
+                tape.move(op.amount);
+            } else if (op.type == 2) {
+                var buf = new Byte[1];
+                buf[0] = tape.get();
+                stdout.write(buf, 1);
+                delete buf;
+            } else if (op.type == 3) {
+                while (tape.get() != 0) {
+                    run(tape, op.loopOps);
+                }
+            }
+        }
+    }
+}
