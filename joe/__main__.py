@@ -1,5 +1,6 @@
 from argparse import ArgumentParser
 from ctypes import CFUNCTYPE, POINTER, c_char_p, c_int
+from pathlib import Path
 
 from llvmlite import binding as llvm_binding
 from llvmlite import ir
@@ -23,7 +24,9 @@ with open(args.FILE, "r") as f:
     source = f.read()
 
 nodes = list(parse(scan(args.FILE, source)))
-module = joeeval.evaluate_module(joeeval.ModuleAST("script", "<script>", nodes))
+module = joeeval.evaluate_module(
+    joeeval.ModuleAST(Path(args.FILE).stem, args.FILE, nodes)
+)
 
 llvm_binding.initialize()
 llvm_binding.initialize_native_target()
