@@ -425,9 +425,14 @@ def evaluate_expr(
         return typed_ast.UnaryExpr(expr.type, expr_ast, expr_ast.operator, expr)
     elif isinstance(expr_ast, ast.BinaryExpr):
         lhs = evaluate_expr(env, scope, expr_ast.left)
-        rhs = _maybe_resize_integer(lhs.type, evaluate_expr(env, scope, expr_ast.right))
+        rhs = evaluate_expr(env, scope, expr_ast.right)
 
-        return typed_ast.BinaryExpr(lhs.type, expr_ast, expr_ast.operator, lhs, rhs)
+        if expr_ast.operator in [ast.BinaryOperator.AND, ast.BinaryOperator.OR]:
+            ty = env.get_type_constructor("Boolean").instantiate([])
+        else:
+            ty = lhs.type
+            rhs = _maybe_resize_integer(lhs.type, rhs)
+        return typed_ast.BinaryExpr(ty, expr_ast, expr_ast.operator, lhs, rhs)
 
 
 _integer_type_sizes = {
