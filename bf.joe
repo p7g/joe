@@ -17,6 +17,9 @@ class Tape {
 
     void move(Integer amount) {
         pos = pos + amount;
+        while (pos >= data.length) {
+            data.push(0);
+        }
     }
 }
 
@@ -48,7 +51,7 @@ class Parser {
         Array<Op> uninitOps;
 
         var buf = new Byte[2];
-        while (f.read(buf, 1) != -1) {
+        while (f.read(buf, 1) == 1) {
             var c = buf[0];
             if (c == 43) {
                 ops.push(new Op(0, 1, uninitOps));
@@ -62,7 +65,7 @@ class Parser {
                 ops.push(new Op(2, 0, uninitOps));
             } else if (c == 91) {
                 ops.push(new Op(3, 0, parse(f)));
-            } else if (c == 93) {
+            } else if (c == 93 || c == -1) {
                 var opArray = ops.asArray();
                 delete ops._array;
                 delete ops;
@@ -81,15 +84,15 @@ class Main {
     static File stdout;
 
     static Integer main(Array<String> args) {
-        if (args.length < 1) {
-            var stdout = new File(2);
+        if (args.length < 2) {
+            var stderr = new File(2);
             var msg = "Expected filename arg\n".asByteArray();
-            stdout.write(msg, msg.length);
-            delete stdout;
+            stderr.write(msg, msg.length);
+            delete stderr;
             return 1;
         }
 
-        var f = File.open(args[0], 0);
+        var f = File.open(args[1], 0);
 
         var ops = Parser.parse(f);
 
@@ -101,7 +104,7 @@ class Main {
 
         run(tape, ops);
 
-        var x = new Op(0, 0, ops);
+        var x = new Op(3, 0, ops);
         x.deinit();
         delete x;
         delete tape;
