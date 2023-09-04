@@ -101,6 +101,23 @@ class Printer {
         this.outFile = outFile;
     }
 
+    void printChar(Byte value) {
+        var buf = new Byte[1];
+        buf[0] = value;
+        outFile.write(buf, 1);
+        delete buf;
+    }
+
+    void printString(String s) {
+        var bytes = s.asByteArray();
+
+        for (var i = 0; i < bytes.length - 1; i = i + 1) {
+            printChar(bytes[i]);
+        }
+
+        delete bytes;
+    }
+
     void printInt<T: IInteger>(T value) {
         var digits = new ArrayList<Byte>();
 
@@ -119,11 +136,12 @@ class Printer {
             buf[digits.length - (i + 1)] = charCode;
         }
         outFile.write(buf, digits.length);
+        delete digits._array;
+        delete digits;
+        delete buf;
     }
 
     void newLine() {
-        var buf = new Byte[1];
-        buf[0] = 10;
-        outFile.write(buf, 1);
+        printChar(10);
     }
 }
