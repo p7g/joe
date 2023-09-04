@@ -50,15 +50,15 @@ def _type_to_llvm(
     name = eval_type.type_constructor.name()
     if name == "joe.prelude.void":
         return ir.VoidType()
-    elif name == "joe.prelude.Byte":
+    elif name == "joe.prelude.byte":
         return ir.IntType(8)
-    elif name in ("joe.prelude.Integer", "joe.prelude.Unsigned"):
+    elif name in ("joe.prelude.int", "joe.prelude.uint"):
         return ir.IntType(32)
-    elif name in ("joe.prelude.Long", "joe.prelude.UnsignedLong"):
+    elif name in ("joe.prelude.long", "joe.prelude.ulong"):
         return ir.IntType(64)
-    elif name == "joe.prelude.Double":
+    elif name == "joe.prelude.double":
         return ir.DoubleType()
-    elif name == "joe.prelude.Boolean":
+    elif name == "joe.prelude.boolean":
         return ir.IntType(1)
     elif name == "joe.prelude.String":
         return ir.PointerType(ir.IntType(8))

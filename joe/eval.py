@@ -316,13 +316,13 @@ def evaluate_expr(
         return typed_ast.ThisExpr(scope["this"], expr_ast)
     elif isinstance(expr_ast, ast.LiteralInt):
         return typed_ast.LiteralInt(
-            env.get_type_constructor("Integer").instantiate([]),
+            env.get_type_constructor("int").instantiate([]),
             expr_ast,
             expr_ast.value,
         )
     elif isinstance(expr_ast, ast.LiteralBool):
         return typed_ast.LiteralBool(
-            env.get_type_constructor("Boolean").instantiate([]),
+            env.get_type_constructor("boolean").instantiate([]),
             expr_ast,
             expr_ast.value,
         )
@@ -332,7 +332,7 @@ def evaluate_expr(
         )
     elif isinstance(expr_ast, ast.LiteralFloat):
         return typed_ast.LiteralFloat(
-            env.get_type_constructor("Double").instantiate([]), expr_ast, expr_ast.value
+            env.get_type_constructor("double").instantiate([]), expr_ast, expr_ast.value
         )
     elif isinstance(expr_ast, ast.DotExpr):
         receiver_type: BoundType | BoundTypeConstructor
@@ -407,7 +407,7 @@ def evaluate_expr(
         array = evaluate_expr(env, scope, expr_ast.expr)
         index = _maybe_resize_integer(
             # FIXME: should be able to look up types by fully-qualified names
-            env.get_type_constructor("Long").instantiate([]),
+            env.get_type_constructor("long").instantiate([]),
             evaluate_expr(env, scope, expr_ast.index),
         )
         expr_ty = array.type.get_method("get", []).get_return_type()
@@ -415,7 +415,7 @@ def evaluate_expr(
     elif isinstance(expr_ast, ast.NewArrayExpr):
         ty = evaluate_type(env, expr_ast.type)
         size = _maybe_resize_integer(
-            env.get_type_constructor("Long").instantiate([]),
+            env.get_type_constructor("long").instantiate([]),
             evaluate_expr(env, scope, expr_ast.size),
         )
         array_ty = env.get_type_constructor("Array").instantiate([ty])
@@ -428,7 +428,7 @@ def evaluate_expr(
         rhs = evaluate_expr(env, scope, expr_ast.right)
 
         if expr_ast.operator in [ast.BinaryOperator.AND, ast.BinaryOperator.OR]:
-            ty = env.get_type_constructor("Boolean").instantiate([])
+            ty = env.get_type_constructor("boolean").instantiate([])
         else:
             ty = lhs.type
             rhs = _maybe_resize_integer(lhs.type, rhs)
@@ -436,12 +436,12 @@ def evaluate_expr(
 
 
 _integer_type_sizes = {
-    "joe.prelude.Byte<>": 1,
+    "joe.prelude.byte<>": 1,
     # "joe.prelude.Short<>": 2,
-    "joe.prelude.Integer<>": 4,
-    "joe.prelude.Unsigned<>": 4,
-    "joe.prelude.Long<>": 8,
-    "joe.prelude.UnsignedLong<>": 8,
+    "joe.prelude.int<>": 4,
+    "joe.prelude.uint<>": 4,
+    "joe.prelude.long<>": 8,
+    "joe.prelude.ulong<>": 8,
 }
 
 

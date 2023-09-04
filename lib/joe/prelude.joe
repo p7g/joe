@@ -1,55 +1,55 @@
 class void {}
-class Double {}
-class Boolean {}
+class double {}
+class boolean {}
 
 interface IInteger {}
-class Byte implements IInteger {}
-class Integer implements IInteger {}
-class Long implements IInteger {}
-class Unsigned implements IInteger {}
-class UnsignedLong implements IInteger {}
+class byte implements IInteger {}
+class int implements IInteger {}
+class long implements IInteger {}
+class uint implements IInteger {}
+class ulong implements IInteger {}
 
 class String {
-    UnsignedLong length() {}
-    Pointer<Byte> asPointer() {}
+    ulong length() {}
+    Pointer<byte> asPointer() {}
 
-    Array<Byte> asByteArray() {
+    Array<byte> asByteArray() {
         return asPointer().asArray(length() + 1);
     }
 }
 
 class Pointer<T> {
-    T deref(UnsignedLong index) {}
-    Array<T> asArray(UnsignedLong length) {}
+    T deref(ulong index) {}
+    Array<T> asArray(ulong length) {}
 }
 
 class Array<T> {
     Pointer<T> _elements;
-    Long length;
+    long length;
 
-    T get(Long index) {
+    T get(long index) {
         return _elements.deref(index);
     }
 }
 
 class ArrayList<T> {
     Array<T> _array;
-    Long length;
+    long length;
 
     ArrayList() {
         _array = new T[8];
         length = 0;
     }
 
-    T get(Long index) {
+    T get(long index) {
         return _array[index];
     }
 
-    void set(Long index, T newValue) {
+    void set(long index, T newValue) {
         _array[index] = newValue;
     }
 
-    Long push(T value) {
+    long push(T value) {
         _maybeGrow();
         _array[length] = value;
         length = length + 1;
@@ -66,7 +66,7 @@ class ArrayList<T> {
             return;
         }
         var newArray = new T[_array.length * 2];
-        for (Long i = 0; i < _array.length; i = i + 1) {
+        for (long i = 0; i < _array.length; i = i + 1) {
             newArray[i] = _array[i];
         }
         delete _array;
@@ -75,7 +75,7 @@ class ArrayList<T> {
 
     Array<T> asArray() {
         var newArr = new T[length];
-        for (Long i = 0; i < length; i = i + 1) {
+        for (long i = 0; i < length; i = i + 1) {
             newArr[i] = _array[i];
         }
         return newArr;
@@ -83,15 +83,15 @@ class ArrayList<T> {
 }
 
 class File {
-    Integer _fd;
+    int _fd;
 
-    File(Integer fd) { _fd = fd; }
+    File(int fd) { _fd = fd; }
 
-    static File open(String pathname, Integer flags) {}
-    Integer close() {}
-    Long lseek(Integer offset, Integer whence) {}
-    UnsignedLong read(Array<Byte> buf, UnsignedLong count) {}
-    UnsignedLong write(Array<Byte> buf, UnsignedLong count) {}
+    static File open(String pathname, int flags) {}
+    int close() {}
+    long lseek(int offset, int whence) {}
+    ulong read(Array<byte> buf, ulong count) {}
+    ulong write(Array<byte> buf, ulong count) {}
 }
 
 class Printer {
@@ -101,8 +101,8 @@ class Printer {
         this.outFile = outFile;
     }
 
-    void printChar(Byte value) {
-        var buf = new Byte[1];
+    void printChar(byte value) {
+        var buf = new byte[1];
         buf[0] = value;
         outFile.write(buf, 1);
         delete buf;
@@ -119,7 +119,7 @@ class Printer {
     }
 
     void printInt<T: IInteger>(T value) {
-        var digits = new ArrayList<Byte>();
+        var digits = new ArrayList<byte>();
 
         if (value == 0) {
             digits.push(0);
@@ -130,7 +130,7 @@ class Printer {
             }
         }
 
-        var buf = new Byte[digits.length];
+        var buf = new byte[digits.length];
         for (var i = digits.length - 1; i >= 0; i = i - 1) {
             var charCode = digits.get(i) + 48;
             buf[digits.length - (i + 1)] = charCode;
