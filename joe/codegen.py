@@ -1,4 +1,5 @@
 from collections import ChainMap
+from collections.abc import Iterable
 from contextlib import contextmanager
 from itertools import chain
 from typing import TypeAlias
@@ -307,8 +308,22 @@ class MethodCompiler(ast.AstVisitor):
         yield
         self.scope = self.scope.parents
 
+    def _compile_block(self, statements: Iterable[ast.Statement]) -> None:
+        for statement in statements:
+            if self.ir_builder.block.is_terminated:
+                break
+            statement.accept(self)
+
     def visit_method_decl(self, method_decl: ast.MethodDecl) -> None:
-        super().visit_method_decl(method_decl)
+        self.visit_type(method_decl.return_type)
+        self.visit_identifier(method_decl.name)
+        for type_parameter in method_decl.type_parameters:
+            self.visit_type_parameter(type_parameter)
+        for parameter in method_decl.parameters:
+            self.visit_parameter(parameter)
+        self._compile_block(method_decl.body)
+
+        # Add implicit return if needed
         last_block = self.ir_builder.block
         if last_block and not last_block.is_terminated:
             self.ir_builder.position_at_end(last_block)
@@ -321,7 +336,12 @@ class MethodCompiler(ast.AstVisitor):
                 self.ir_builder.ret_void()
 
     def visit_constructor_decl(self, constructor_decl: ast.ConstructorDecl) -> None:
-        super().visit_constructor_decl(constructor_decl)
+        self.visit_identifier(constructor_decl.name)
+        for parameter in constructor_decl.parameters:
+            self.visit_parameter(parameter)
+        self._compile_block(constructor_decl.body)
+
+        # Add implicit return if needed
         if self.ir_builder.block and not self.ir_builder.block.is_terminated:
             self._comment("implicit return")
             self.ir_builder.ret_void()
@@ -361,8 +381,7 @@ class MethodCompiler(ast.AstVisitor):
         with self._push_scope():
             self.ir_builder.position_at_end(then_block)
             self._comment("if true")
-            for statement in if_statement.then:
-                statement.accept(self)
+            self._compile_block(if_statement.then)
 
         # i.e. if there is a return
         assert self.ir_builder.block
@@ -372,8 +391,7 @@ class MethodCompiler(ast.AstVisitor):
         with self._push_scope():
             self.ir_builder.position_at_end(else_block)
             self._comment("else")
-            for statement in if_statement.else_:
-                statement.accept(self)
+            self._compile_block(if_statement.else_)
 
         assert self.ir_builder.block
         if not self.ir_builder.block.is_terminated:
@@ -398,8 +416,7 @@ class MethodCompiler(ast.AstVisitor):
         with self._push_scope():
             self.ir_builder.position_at_end(body_block)
             self._comment("while body")
-            for statement in while_statement.body:
-                statement.accept(self)
+            self._compile_block(while_statement.body)
 
         assert self.ir_builder.block
         if not self.ir_builder.block.is_terminated:
@@ -432,8 +449,7 @@ class MethodCompiler(ast.AstVisitor):
 
             self.ir_builder.position_at_end(body_block)
             self._comment("for body")
-            for statement in for_statement.body:
-                statement.accept(self)
+            self._compile_block(for_statement.body)
 
             assert self.ir_builder.block
             if not self.ir_builder.block.is_terminated:
