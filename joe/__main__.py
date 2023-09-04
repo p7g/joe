@@ -34,10 +34,9 @@ user_main = module.environment.get_type_constructor(main_class).get_method(
     user_main_name, []
 )
 
-ctx = CompileContext()
-ctx.ir_module.data_layout = (
-    "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128"
-)
+target = llvm_binding.Target.from_default_triple()
+target_machine = target.create_target_machine()
+ctx = CompileContext(target_machine)
 compiler = MethodCompiler(ctx, user_main)
 user_main.decl_ast.accept(compiler)
 
@@ -82,13 +81,10 @@ ir_builder.store(
 )
 ir_builder.ret(ir_builder.call(compiler.llvm_function, [args_array]))
 
-compiler.ctx.ir_module.triple = llvm_binding.get_default_triple()
 llvm_ir = str(compiler.ctx.ir_module)
 if args.dump_llvm:
     print(llvm_ir)
 
-target = llvm_binding.Target.from_default_triple()
-target_machine = target.create_target_machine()
 backing_mod = llvm_binding.parse_assembly("")
 engine = llvm_binding.create_mcjit_compiler(backing_mod, target_machine)
 mod = llvm_binding.parse_assembly(llvm_ir)

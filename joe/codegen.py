@@ -128,14 +128,17 @@ class CompileContext:
         "ir_module",
         "_malloc",
         "_free",
-        "_target_data",
+        "_target_machine",
     )
 
-    def __init__(self) -> None:
+    def __init__(self, target_machine: llvm_binding.TargetMachine) -> None:
         # All code goes in one module for simplicity in accessing globals like
         # interface implementations
+        self._target_machine = target_machine
         self.ir_module = ir.Module()
-        self._malloc = self._free = self._target_data = None
+        self.ir_module.triple = self._target_machine.triple
+        self.ir_module.data_layout = str(self._target_machine.target_data)
+        self._malloc = self._free = None
 
     def get_malloc(self) -> ir.Function:
         if self._malloc is None:
@@ -152,11 +155,7 @@ class CompileContext:
         return self._free
 
     def get_target_data(self) -> llvm_binding.TargetData:
-        if self._target_data is None:
-            self._target_data = llvm_binding.create_target_data(
-                self.ir_module.data_layout
-            )
-        return self._target_data
+        return self._target_machine.target_data
 
 
 # For each type encountered, emit the type declaration
