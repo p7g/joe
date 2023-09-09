@@ -326,6 +326,12 @@ def evaluate_expr(
             expr_ast,
             expr_ast.value,
         )
+    elif isinstance(expr_ast, ast.LiteralChar):
+        return typed_ast.LiteralChar(
+            env.get_type_constructor("char").instantiate([]),
+            expr_ast,
+            expr_ast.value,
+        )
     elif isinstance(expr_ast, ast.LiteralString):
         return typed_ast.LiteralString(
             env.get_type_constructor("String").instantiate([]), expr_ast, expr_ast.value

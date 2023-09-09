@@ -36,6 +36,9 @@ class TypedAstVisitor:
     def visit_literal_bool(self, literal_bool: "LiteralBool") -> None:
         pass
 
+    def visit_literal_char(self, literal_char: "LiteralChar") -> None:
+        pass
+
     def visit_identifier_expr(self, identifier_expr: "IdentifierExpr") -> None:
         pass
 
@@ -81,6 +84,7 @@ Expr: TypeAlias = Union[
     "LiteralFloat",
     "LiteralString",
     "LiteralBool",
+    "LiteralChar",
     "IdentifierExpr",
     "ThisExpr",
     "DotExpr",
@@ -141,6 +145,20 @@ class LiteralBool(Node):
 
     def accept(self, visitor: TypedAstVisitor) -> None:
         visitor.visit_literal_bool(self)
+
+
+class LiteralChar(Node):
+    __slots__ = ("value",)
+
+    def __init__(
+        self, type_: "BoundType", original_node: ast.Node, value: str
+    ) -> None:
+        assert len(value) == 1
+        super().__init__(type_, original_node)
+        self.value = value
+
+    def accept(self, visitor: TypedAstVisitor) -> None:
+        visitor.visit_literal_char(self)
 
 
 class IdentifierExpr(Node):

@@ -27,6 +27,7 @@ from joe.ast import (
     InterfaceDecl,
     InterfaceMember,
     LiteralBool,
+    LiteralChar,
     LiteralFloat,
     LiteralInt,
     LiteralString,
@@ -60,6 +61,7 @@ class TokenType(Enum):
     ASTERISK = auto()
     BANG = auto()
     BANG_EQUAL = auto()
+    CHAR = auto()
     CLASS = auto()
     COLON = auto()
     COMMA = auto()
@@ -205,8 +207,29 @@ class _Chars(Peekable[str]):
         return c
 
 
+def _read_string_char(chars: _Chars, location: Location) -> str:
+    c = next(chars)
+    if c == "\\":
+        c = next(chars)
+        if c == "n":
+            return "\n"
+        elif c == "t":
+            return "\t"
+        elif c == '"':
+            return '"'
+        elif c == "\\":
+            return "\\"
+        else:
+            raise JoeParseError(f"Unexpected escape sequence {c!r} at {location}")
+    else:
+        return c
+
+
 def scan(filename: str, chars: Iterable[str]) -> Iterator[Token]:
     chars = _Chars(chars)
+
+    def get_location() -> Location:
+        return Location(filename, chars.line, chars.column)
 
     while True:
         try:
@@ -217,7 +240,7 @@ def scan(filename: str, chars: Iterable[str]) -> Iterator[Token]:
         if c.isspace():
             continue
 
-        location = Location(filename, chars.line, chars.column)
+        location = get_location()
 
         if c in _one_char_tokens:
             yield Token(_one_char_tokens[c], location, c)
@@ -233,7 +256,9 @@ def scan(filename: str, chars: Iterable[str]) -> Iterator[Token]:
                 c2 = None
             else:
                 unexpected = repr(c2) if c2 is not None else "end of input"
-                raise JoeParseError(f"Unexpected token {unexpected} at {location}")
+                raise JoeParseError(
+                    f"Unexpected token {unexpected} at {get_location()}"
+                )
             yield Token(ty, location, c + (c2 or ""))
         elif c == "/":
             if chars.peek() == "/":
@@ -273,28 +298,24 @@ def scan(filename: str, chars: Iterable[str]) -> Iterator[Token]:
                     break
                 s += next(chars)
             yield Token(TokenType.INT, location, s)
+        elif c == "'":
+            s = _read_string_char(chars, get_location())
+            c2 = chars.peek()
+            if c2 != "'":
+                unexpected = repr(c2) if c2 is not None else "end of input"
+                raise JoeParseError(
+                    f"Unexpected token {unexpected} at {get_location()}"
+                )
+            next(chars)
+            yield Token(TokenType.CHAR, location, s)
         elif c == '"':
             s = ""
             while True:
                 c2 = next(chars)
                 if c2 == '"':
                     break
-                elif c2 == "\\":
-                    c2 = next(chars)
-                    if c2 == "n":
-                        s += "\n"
-                    elif c2 == "t":
-                        s += "\t"
-                    elif c2 == '"':
-                        s += '"'
-                    elif c2 == "\\":
-                        s += "\\"
-                    else:
-                        raise JoeParseError(
-                            f"Unexpected escape sequence {c2!r} at {location}"
-                        )
                 else:
-                    s += c2
+                    s += _read_string_char(chars, get_location())
             yield Token(TokenType.STRING, location, s)
         else:
             raise JoeParseError(f"Unexpected token {c!r} at {location}")
@@ -756,6 +777,8 @@ def _nud(tokens: _Tokens) -> Expr:
         tok := tokens.match(TokenType.FALSE)
     ):
         return LiteralBool(tok.location, tok.type == TokenType.TRUE)
+    elif tok := tokens.match(TokenType.CHAR):
+        return LiteralChar(tok.location, tok.text)
     elif tok := tokens.match(TokenType.THIS):
         return ThisExpr(tok.location)
     elif tok := tokens.match(TokenType.IDENTIFIER):

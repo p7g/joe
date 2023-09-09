@@ -176,6 +176,9 @@ class _Unparser(ast.AstVisitor):
     def visit_literal_bool(self, literal_bool: ast.LiteralBool) -> None:
         self._append("true" if literal_bool.value else "false")
 
+    def visit_literal_char(self, literal_char: ast.LiteralChar) -> None:
+        self._append(repr(literal_char.value))
+
     def visit_identifier_expr(self, identifier_expr: ast.IdentifierExpr) -> None:
         identifier_expr.name.accept(self)
 

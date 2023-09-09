@@ -9,6 +9,8 @@ class long implements IInteger {}
 class uint implements IInteger {}
 class ulong implements IInteger {}
 
+class char implements IInteger {}
+
 class String {
     ulong length() {}
     Pointer<byte> asPointer() {}

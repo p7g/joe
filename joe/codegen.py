@@ -60,6 +60,9 @@ def _type_to_llvm(
         return ir.DoubleType()
     elif name == "joe.prelude.boolean":
         return ir.IntType(1)
+    elif name == "joe.prelude.char":
+        # FIXME: unicode
+        return ir.IntType(8)
     elif name == "joe.prelude.String":
         return ir.PointerType(ir.IntType(8))
     elif name == "joe.prelude.Pointer":
@@ -548,6 +551,12 @@ class ExpressionCompiler(typed_ast.TypedAstVisitor):
         self._prev_expr = ir.Constant(
             _type_to_llvm(self.method_compiler.ctx.ir_module, literal_bool.type),
             literal_bool.value,
+        )
+
+    def visit_literal_char(self, literal_char: typed_ast.LiteralChar) -> None:
+        self._prev_expr = ir.Constant(
+            _type_to_llvm(self.method_compiler.ctx.ir_module, literal_char.type),
+            ord(literal_char.value),
         )
 
     def visit_identifier_expr(self, identifier_expr: typed_ast.IdentifierExpr) -> None:
