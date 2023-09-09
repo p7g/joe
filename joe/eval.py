@@ -148,6 +148,20 @@ class BoundType:
             return BoundConstructor(self, constructor)
         return None
 
+    def get_destructor(self) -> "BoundDestructor | None":
+        assert isinstance(self.decl_ast, ast.ClassDecl)
+        destructor = next(
+            (
+                member
+                for member in self.decl_ast.members
+                if isinstance(member, ast.DestructorDecl)
+            ),
+            None,
+        )
+        if destructor:
+            return BoundDestructor(self, destructor)
+        return None
+
 
 class BoundMethod:
     def __init__(
@@ -208,6 +222,17 @@ class BoundConstructor:
             evaluate_type(self.environment, param.type)
             for param in self.decl_ast.parameters
         ]
+
+
+class BoundDestructor:
+    def __init__(self, bound_type: BoundType, decl_ast: ast.DestructorDecl) -> None:
+        self.self_type = bound_type
+        self.environment = bound_type.environment
+        self.decl_ast = decl_ast
+        self.static = False
+
+    def name(self) -> str:
+        return f"{self.self_type.name()}.~{self.decl_ast.name.name}"
 
 
 class ModuleAST:

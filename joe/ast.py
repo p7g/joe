@@ -69,6 +69,11 @@ class AstVisitor:
         for statement in constructor_decl.body:
             self.visit_statement(statement)
 
+    def visit_destructor_decl(self, destructor_decl: "DestructorDecl") -> None:
+        self.visit_identifier(destructor_decl.name)
+        for statement in destructor_decl.body:
+            self.visit_statement(statement)
+
     def visit_field_decl(self, field_decl: "FieldDecl") -> None:
         self.visit_type(field_decl.type)
         self.visit_identifier(field_decl.name)
@@ -330,6 +335,20 @@ class ConstructorDecl(Node):
         visitor.visit_constructor_decl(self)
 
 
+class DestructorDecl(Node):
+    __slots__ = ("name", "body")
+
+    def __init__(
+        self, location: Location, name: Identifier, body: Iterable[Statement]
+    ) -> None:
+        super().__init__(location)
+        self.name = name
+        self.body = body
+
+    def accept(self, visitor: AstVisitor) -> None:
+        visitor.visit_destructor_decl(self)
+
+
 class MethodDecl(Node):
     __slots__ = (
         "return_type",
@@ -377,8 +396,8 @@ class FieldDecl(Node):
         visitor.visit_field_decl(self)
 
 
-ClassMember: TypeAlias = MethodDecl | ConstructorDecl | FieldDecl
-valid_class_members: Final = (MethodDecl, ConstructorDecl, FieldDecl)
+ClassMember: TypeAlias = MethodDecl | ConstructorDecl | DestructorDecl | FieldDecl
+valid_class_members: Final = (MethodDecl, ConstructorDecl, DestructorDecl, FieldDecl)
 InterfaceMember: TypeAlias = MethodSig | MethodDecl
 valid_interface_members: Final = (MethodSig, MethodDecl)
 

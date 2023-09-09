@@ -150,9 +150,7 @@ class LiteralBool(Node):
 class LiteralChar(Node):
     __slots__ = ("value",)
 
-    def __init__(
-        self, type_: "BoundType", original_node: ast.Node, value: str
-    ) -> None:
+    def __init__(self, type_: "BoundType", original_node: ast.Node, value: str) -> None:
         assert len(value) == 1
         super().__init__(type_, original_node)
         self.value = value

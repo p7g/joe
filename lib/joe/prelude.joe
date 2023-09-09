@@ -32,6 +32,13 @@ class Array<T> {
     T get(long index) {
         return _elements.deref(index);
     }
+
+    ~Array() {
+        for (int i = 0; i < length; i = i + 1) {
+            delete _elements.deref(i);
+        }
+        delete _elements;
+    }
 }
 
 class ArrayList<T> {
@@ -41,6 +48,14 @@ class ArrayList<T> {
     ArrayList() {
         _array = new T[8];
         length = 0;
+    }
+
+    ~ArrayList() {
+        for (int i = 0; i < length; i = i + 1) {
+            delete _array[i];
+        }
+        _array.length = 0;
+        delete _array;
     }
 
     T get(long index) {
@@ -71,15 +86,17 @@ class ArrayList<T> {
         for (long i = 0; i < _array.length; i = i + 1) {
             newArray[i] = _array[i];
         }
+        _array.length = 0;
         delete _array;
         _array = newArray;
     }
 
-    Array<T> asArray() {
+    Array<T> intoArray() {
         var newArr = new T[length];
         for (long i = 0; i < length; i = i + 1) {
             newArr[i] = _array[i];
         }
+        length = 0;
         return newArr;
     }
 }
@@ -97,10 +114,15 @@ class File {
 }
 
 class Printer {
+    // owned file
     File outFile;
 
     Printer(File outFile) {
         this.outFile = outFile;
+    }
+
+    ~Printer() {
+        delete outFile;
     }
 
     void printChar(byte value) {
@@ -138,7 +160,6 @@ class Printer {
             buf[digits.length - (i + 1)] = charCode;
         }
         outFile.write(buf, digits.length);
-        delete digits._array;
         delete digits;
         delete buf;
     }

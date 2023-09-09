@@ -22,18 +22,19 @@ from joe import ast, eval, typed_ast, unparse
 def _method_to_llvm_type(
     ir_module: ir.Module,
     this_type: ir.Type | None,
-    bound_method: eval.BoundMethod | eval.BoundConstructor,
+    bound_method: eval.BoundMethod | eval.BoundConstructor | eval.BoundDestructor,
     static: bool,
     in_progress: dict[str, ir.Type] | None = None,
 ) -> ir.FunctionType:
     parameters: list[ir.Type] = (
         [this_type] if this_type is not None and not static else []
     )
-    for param in bound_method.get_parameter_types():
-        parameters.append(_type_to_llvm(ir_module, param, in_progress=in_progress))
+    if not isinstance(bound_method, eval.BoundDestructor):
+        for param in bound_method.get_parameter_types():
+            parameters.append(_type_to_llvm(ir_module, param, in_progress=in_progress))
     return_type = (
         ir.VoidType()
-        if isinstance(bound_method, eval.BoundConstructor)
+        if isinstance(bound_method, (eval.BoundConstructor, eval.BoundDestructor))
         else _type_to_llvm(
             ir_module, bound_method.get_return_type(), in_progress=in_progress
         )
@@ -188,7 +189,11 @@ class MethodCompiler(ast.AstVisitor):
         "_prev_expr",
     )
 
-    def __init__(self, ctx: CompileContext, method: eval.BoundMethod) -> None:
+    def __init__(
+        self,
+        ctx: CompileContext,
+        method: eval.BoundMethod | eval.BoundConstructor | eval.BoundDestructor,
+    ) -> None:
         self.ctx = ctx
         self.method = method
         self.this_type = (
@@ -250,7 +255,11 @@ class MethodCompiler(ast.AstVisitor):
                         param.name.name,
                         eval.evaluate_type(method.environment, param.type),
                     )
-                    for param in method.decl_ast.parameters
+                    for param in (
+                        method.decl_ast.parameters
+                        if not isinstance(method, eval.BoundDestructor)
+                        else []
+                    )
                 ),
             ),
             self.llvm_function.args,
@@ -316,6 +325,19 @@ class MethodCompiler(ast.AstVisitor):
                 break
             statement.accept(self)
 
+    def _get_compiled_method(
+        self, method: eval.BoundMethod | eval.BoundConstructor | eval.BoundDestructor
+    ) -> ir.Function:
+        try:
+            function = self.ctx.ir_module.get_global(method.name())
+        except KeyError:
+            # Look up class type, get method, compile it
+            method_compiler = MethodCompiler(self.ctx, method)
+            method.decl_ast.accept(method_compiler)
+            function = method_compiler.llvm_function
+            assert function is self.ctx.ir_module.get_global(method.name())
+        return function
+
     def visit_method_decl(self, method_decl: ast.MethodDecl) -> None:
         self.visit_type(method_decl.return_type)
         self.visit_identifier(method_decl.name)
@@ -348,22 +370,34 @@ class MethodCompiler(ast.AstVisitor):
             self._comment("implicit return")
             self.ir_builder.ret_void()
 
+    def visit_destructor_decl(self, destructor_decl: ast.DestructorDecl) -> None:
+        self.visit_identifier(destructor_decl.name)
+        self._compile_block(destructor_decl.body)
+
+        # Add implicit return if needed
+        if self.ir_builder.block and not self.ir_builder.block.is_terminated:
+            self._comment("implicit return")
+            self.ir_builder.ret_void()
+
     def visit_return_statement(self, return_statement: ast.ReturnStatement) -> None:
         if return_statement.expr:
             self.ir_builder.ret(self._compile_expr(return_statement.expr))
         else:
             self.ir_builder.ret_void()
 
-    def visit_delete_statement(self, delete_expr: ast.DeleteStatement) -> None:
-        free = self.ctx.get_free()
-        self.ir_builder.call(
-            free,
-            [
-                self.ir_builder.bitcast(
-                    self._compile_expr(delete_expr.expr), ir.PointerType(ir.IntType(8))
-                )
-            ],
-        )
+    def visit_delete_statement(self, delete_statement: ast.DeleteStatement) -> None:
+        obj_ty, obj = self._compile_expr_with_type(delete_statement.expr)
+        destructor = obj_ty.get_destructor()
+        if destructor:
+            destructor_fn = self._get_compiled_method(destructor)
+            self.ir_builder.call(destructor_fn, [obj])
+
+        if obj.type.is_pointer:
+            free = self.ctx.get_free()
+            self.ir_builder.call(
+                free,
+                [self.ir_builder.bitcast(obj, ir.PointerType(ir.IntType(8)))],
+            )
 
     def visit_expr_statement(self, expr_statement: ast.ExprStatement) -> None:
         self._compile_expr(expr_statement.expr)
@@ -862,17 +896,7 @@ class ExpressionCompiler(typed_ast.TypedAstVisitor):
         )
 
     def _get_compiled_method(self, method: eval.BoundMethod) -> ir.Function:
-        try:
-            function = self.method_compiler.ctx.ir_module.get_global(method.name())
-        except KeyError:
-            # Look up class type, get method, compile it
-            method_compiler = MethodCompiler(self.method_compiler.ctx, method)
-            method.decl_ast.accept(method_compiler)
-            function = method_compiler.llvm_function
-            assert function is self.method_compiler.ctx.ir_module.get_global(
-                method.name()
-            )
-        return function
+        return self.method_compiler._get_compiled_method(method)
 
     def visit_call_expr(self, call_expr: typed_ast.CallExpr) -> None:
         function = intrinsics.get_intrinsic(self.method_compiler.ctx, call_expr.method)

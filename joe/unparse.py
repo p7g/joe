@@ -111,6 +111,18 @@ class _Unparser(ast.AstVisitor):
             self._append(self._indentation())
         self._append("}")
 
+    def visit_destructor_decl(self, destructor_decl: ast.DestructorDecl) -> None:
+        self._append(self._indentation())
+        destructor_decl.name.accept(self)
+        self._append("() {")
+        if destructor_decl.body:
+            self._append("\n")
+            with self.indent():
+                self._list(destructor_decl.body, sep="\n\n")
+            self._append("\n")
+            self._append(self._indentation())
+        self._append("}")
+
     def visit_field_decl(self, field_decl: ast.FieldDecl) -> None:
         self._append(self._indentation())
         field_decl.type.accept(self)

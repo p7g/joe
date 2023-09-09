@@ -15,6 +15,7 @@ from joe.ast import (
     ClassMember,
     ConstructorDecl,
     DeleteStatement,
+    DestructorDecl,
     DotExpr,
     Expr,
     ExprStatement,
@@ -100,6 +101,7 @@ class TokenType(Enum):
     STATIC = auto()
     STRING = auto()
     THIS = auto()
+    TILDE = auto()
     TRUE = auto()
     VAR = auto()
     WHILE = auto()
@@ -134,6 +136,7 @@ _one_char_tokens: Final = {
     # TODO: ++ and --
     "-": TokenType.MINUS,
     "+": TokenType.PLUS,
+    "~": TokenType.TILDE,
 }
 
 _one_or_two_char_tokens: Final = {
@@ -511,33 +514,44 @@ def _parse_class_member(tokens: _Tokens) -> ClassMember:
 
 def _parse_member(
     tokens: _Tokens,
-) -> MethodSig | MethodDecl | ConstructorDecl | FieldDecl:
+) -> MethodSig | MethodDecl | ConstructorDecl | DestructorDecl | FieldDecl:
     static = bool(tokens.match(TokenType.STATIC))
+    tilde = tokens.match(TokenType.TILDE)
+    is_destructor = tilde is not None
     type_ = _parse_type(tokens)
     if tokens.match(TokenType.LEFT_PAREN, consume=False):
         if type_.type_arguments:
             raise JoeParseError(f"Constructor cannot be generic at {type_.location}")
         name = type_.name
         type_ = Type(name.location, Identifier(name.location, "void"), [])
-        is_constructor = True
+        is_constructor = not is_destructor
+    elif is_destructor:
+        raise JoeParseError(f"Invalid destructor signature at {tilde.location}")
     else:
         name = _parse_identifier(tokens)
         is_constructor = False
 
     if (
         is_constructor
+        or is_destructor
         or tokens.match(TokenType.LEFT_PAREN, consume=False)
         or tokens.match(TokenType.LEFT_ANGLE_BRACKET, consume=False)
     ):
         if tokens.match(TokenType.LEFT_ANGLE_BRACKET, consume=False):
-            assert not is_constructor
+            assert not is_constructor and not is_destructor
             type_param_list = _parse_type_param_list(tokens)
         else:
             type_param_list = []
         params = _parse_param_list(tokens)
+        if is_destructor and params:
+            raise JoeParseError(
+                f"Destructor cannot have any parameters at {name.location}"
+            )
         if tokens.match(TokenType.SEMICOLON):
             if is_constructor:
                 raise JoeParseError(f"Constructor must have a body at {name.location}")
+            if is_destructor:
+                raise JoeParseError(f"Destructor must have a body at {name.location}")
             elif static:
                 raise JoeParseError(
                     f"Interface method cannot be static at {name.location}"
@@ -546,6 +560,8 @@ def _parse_member(
         body = _parse_method_body(tokens)
         if is_constructor:
             return ConstructorDecl(name.location, name, params, body)
+        elif is_destructor:
+            return DestructorDecl(name.location, name, body)
         else:
             return MethodDecl(
                 type_.location, type_, name, type_param_list, params, body, static

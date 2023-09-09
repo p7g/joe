@@ -7,6 +7,10 @@ class Tape {
         data = new ArrayList<byte>();
     }
 
+    ~Tape() {
+        delete data;
+    }
+
     byte get() {
         return data.get(pos);
     }
@@ -34,13 +38,8 @@ class Op {
         this.loopOps = loopOps;
     }
 
-    void deinit() {
+    ~Op() {
         if (type != 3) return;
-
-        for (int i = 0; i < loopOps.length; i = i + 1) {
-            loopOps[i].deinit();
-            delete loopOps[i];
-        }
         delete loopOps;
     }
 }
@@ -66,16 +65,16 @@ class Parser {
             } else if (c == '[') {
                 ops.push(new Op(3, 0, parse(f)));
             } else if (c == ']' || c == -1) {
-                var opArray = ops.asArray();
-                delete ops._array;
+                var opArray = ops.intoArray();
                 delete ops;
+                delete buf;
                 return opArray;
             }
         }
 
-        var opArray = ops.asArray();
-        delete ops._array;
+        var opArray = ops.intoArray();
         delete ops;
+        delete buf;
         return opArray;
     }
 }
@@ -85,10 +84,9 @@ class Main {
 
     static int main(Array<String> args) {
         if (args.length < 2) {
-            var stderr = new File(2);
-            var msg = "Expected filename arg\n".asByteArray();
-            stderr.write(msg, msg.length);
-            delete stderr;
+            var err = new Printer(new File(2));
+            err.printString("Expected filename arg\n");
+            delete err;
             return 1;
         }
 
@@ -104,9 +102,7 @@ class Main {
 
         run(tape, ops);
 
-        var x = new Op(3, 0, ops);
-        x.deinit();
-        delete x;
+        delete ops;
         delete tape;
         delete stdout;
     }
