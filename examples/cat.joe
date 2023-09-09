@@ -9,7 +9,10 @@ class Main {
             while ((nread = in.read(buf, bufsz)) != 0) {
                 out.write(buf, nread);
             }
+            delete in;
         }
+        delete out;
+        delete buf;
         return 0;
     }
 }
