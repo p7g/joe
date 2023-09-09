@@ -129,7 +129,6 @@ _one_char_tokens: Final = {
     "]": TokenType.RIGHT_BRACKET,
     "{": TokenType.LEFT_BRACE,
     "}": TokenType.RIGHT_BRACE,
-    "/": TokenType.SLASH,
     # TODO: ++ and --
     "-": TokenType.MINUS,
     "+": TokenType.PLUS,
@@ -236,6 +235,28 @@ def scan(filename: str, chars: Iterable[str]) -> Iterator[Token]:
                 unexpected = repr(c2) if c2 is not None else "end of input"
                 raise JoeParseError(f"Unexpected token {unexpected} at {location}")
             yield Token(ty, location, c + (c2 or ""))
+        elif c == "/":
+            if chars.peek() == "/":
+                while True:
+                    try:
+                        c2 = next(chars)
+                    except StopIteration:
+                        break
+                    if c2 == "\n":
+                        break
+            elif chars.peek() == "*":
+                next(chars)
+                while True:
+                    try:
+                        a = next(chars)
+                    except StopIteration:
+                        break
+                    b = chars.peek()
+                    if a == "*" and b == "/":
+                        next(chars)
+                        break
+            else:
+                yield Token(TokenType.SLASH, location, c)
         elif _is_identifier_start(c):
             ident = c
             while True:
