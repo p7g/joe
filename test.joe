@@ -1,51 +1,50 @@
 class Main {
-    static Integer x;
+    static int x;
 
-    static Integer main(Array<String> args) {
+    static int main(Array<String> args) {
         x = 123;
         printX();
     }
 
     static void printX() {
         var p = new Printer(new File(1));
-        p.printInt<Integer>(x);
+        p.printInt<int>(x);
         p.newLine();
     }
 
-    static Integer main3(Array<String> args) {
-        var arr = new ArrayList<Integer>();
+    static int main3(Array<String> args) {
+        var arr = new ArrayList<int>();
         for (var i = 0; i < 10; i = i + 1) {
             arr.push(i);
         }
         var p = new Printer(new File(1));
-        p.printInt<Long>(arr.length);
+        p.printInt<long>(arr.length);
         p.newLine();
-        p.printInt<Long>(arr._array.length);
+        p.printInt<long>(arr._array.length);
         p.newLine();
         p.newLine();
         for (var i = 0; i < arr.length; i = i + 1) {
-            p.printInt<Integer>(arr.get(i));
+            p.printInt<int>(arr.get(i));
             p.newLine();
         }
     }
 
-    static Integer main2(Array<String> args) {
+    static int main2(Array<String> args) {
         var f = File.open(args[0], 0);
         var stdout = new File(1);
-        UnsignedLong bufsz = 4096;
+        ulong bufsz = 4096;
         var buf = new Byte[bufsz];
-        UnsignedLong nread;
+        ulong nread;
         var p = new Printer(stdout);
         while ((nread = f.read(buf, bufsz)) != 0) {
             for (var i = 0; i < nread; i = i + 1) {
-                p.printInt<Byte>(buf[i]);
+                p.printInt<byte>(buf[i]);
                 p.newLine();
             }
         }
         f.close();
         delete f;
         delete stdout;
-        delete buf._elements;
         delete buf;
         return 0;
     }
