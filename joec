@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+
+set -e
+
+stem="${1%.*}"
+
+python -x joe --dump-llvm "$1" > "$stem.ll"
+llc -filetype=obj -o "$stem.o" "$stem.ll"
+clang -o "$stem" "$stem.o"
