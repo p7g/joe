@@ -1,0 +1,15 @@
+class Main {
+    static int main(Array<String> args) {
+        var out = new File(1);
+        ulong bufsz = 4096;
+        ulong nread;
+        var buf = new byte[bufsz];
+        for (int i = 1; i < args.length; i = i + 1) {
+            var in = File.open(args[i], 0);
+            while ((nread = in.read(buf, bufsz)) != 0) {
+                out.write(buf, nread);
+            }
+        }
+        return 0;
+    }
+}
