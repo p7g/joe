@@ -86,7 +86,7 @@ def _type_to_llvm(
         vtable_fields = []
         for method in eval_type.type_constructor.decl_ast.members:
             if isinstance(method, ast.MethodDecl):
-                assert not method.type_parameters
+                assert not method.type_parameters  # FIXME: why?
                 bound_method = eval_type.get_method(method.name.name, [])
                 method_type = _method_to_llvm_type(
                     ir_module,
@@ -95,6 +95,8 @@ def _type_to_llvm(
                     bound_method.static,
                     in_progress=in_progress2,
                 )
+                # FIXME: need a way to get vtable index from method name
+                # also don't include static methods in vtable
                 vtable_fields.append(ir.PointerType(method_type))
         vtable_type = ir_module.context.get_identified_type(
             ir_module.get_unique_name(f"{type_name}$$vtable")
@@ -164,8 +166,7 @@ class CompileContext:
 
 # For each type encountered, emit the type declaration
 # For every method called, compile it
-# For every interface used, compile all the class implementations
-#   - maybe track those as types are seen
+# When an object is cast to an interface it implements, compile its impl
 #
 # All this should be cached so anything is only ever compiled once
 #
@@ -175,7 +176,6 @@ class CompileContext:
 Scope: TypeAlias = ChainMap[str, ir.Value]
 
 
-# FIXME: implicit return at end of function for void functions
 class MethodCompiler(ast.AstVisitor):
     __slots__ = (
         "ctx",
@@ -266,6 +266,7 @@ class MethodCompiler(ast.AstVisitor):
             strict=True,
         ):
             ir_param.name = param_name
+            # FIXME: can we just put the parameter in the scope?
             param_var = self.ir_builder.alloca(_type_to_llvm(ctx.ir_module, param_type))
             self.ir_builder.store(ir_param, param_var)
             self.scope[param_name] = param_var
@@ -901,6 +902,7 @@ class ExpressionCompiler(typed_ast.TypedAstVisitor):
     def visit_call_expr(self, call_expr: typed_ast.CallExpr) -> None:
         function = intrinsics.get_intrinsic(self.method_compiler.ctx, call_expr.method)
         if function is None:
+            # FIXME: if it's an interface type, use the vtable
             function = self._get_compiled_method(call_expr.method)
 
         args = []
